@@ -1,0 +1,17 @@
+import type { Config } from "tailwindcss";
+
+const config: Config = {
+  content: ["./app/**/*.{ts,tsx}"],
+  theme: {
+    extend: {
+      fontFamily: {
+        display: ['"Instrument Serif"', "ui-serif", "Georgia", "serif"],
+        sans: ['"Geist"', "ui-sans-serif", "system-ui", "sans-serif"],
+        mono: ['"JetBrains Mono"', "ui-monospace", "SFMono-Regular", "monospace"],
+      },
+    },
+  },
+  plugins: [],
+};
+
+export default config;
