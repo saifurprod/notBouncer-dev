@@ -6,13 +6,11 @@ const API_BASE = "https://api.zoom.us/v2";
 
 /**
  * Returns a valid access token for the given user, refreshing if expired.
- * Adapted from spec section 4.5. KMS replaced with simple AES for MVP.
  */
 export async function getValidAccessToken(userId: string): Promise<string> {
   const row = await prisma.oauthToken.findUnique({ where: { userId } });
   if (!row) throw new Error("no_token");
 
-  // 60-second buffer to avoid race-on-expiry
   if (row.expiresAt.getTime() - Date.now() > 60_000) {
     return decryptToken(row.accessTokenCipher);
   }
@@ -58,58 +56,18 @@ export async function getValidAccessToken(userId: string): Promise<string> {
   return data.access_token;
 }
 
-export class ZoomClient {
-  constructor(private token: string) {}
-
-  private async req(path: string, init: RequestInit = {}) {
-    const res = await fetch(`${API_BASE}${path}`, {
-      ...init,
-      headers: {
-        Authorization: `Bearer ${this.token}`,
-        "Content-Type": "application/json",
-        ...(init.headers || {}),
-      },
-    });
-    if (!res.ok) {
-      const body = await res.text();
-      throw new Error(`zoom_api ${res.status}: ${body}`);
-    }
-    return res.status === 204 ? null : res.json().catch(() => null);
-  }
-
-  /**
-   * Remove a participant from a live meeting.
-   * NOTE: The exact request shape for in-meeting controls has shifted between
-   * Zoom API revisions. Verify against the current docs before public launch:
-   * https://developers.zoom.us/docs/api/meetings/#tag/in-meeting-controls
-   */
-  removeParticipant(meetingId: string, participantId: string) {
-    return this.req(`/live_meetings/${meetingId}/events`, {
-      method: "PATCH",
-      body: JSON.stringify({
-        method: "participant.remove",
-        params: { participants: [{ id: participantId }] },
-      }),
-    });
-  }
-
-  sendInMeetingChat(meetingId: string, message: string) {
-    return this.req(`/live_meetings/${meetingId}/events`, {
-      method: "PATCH",
-      body: JSON.stringify({
-        method: "chat.send",
-        params: { message },
-      }),
-    });
-  }
-}
-
-/** Convenience: fetch the Zoom user profile of the currently-authenticated host. */
+/** Fetch the Zoom user profile of the currently-authenticated host. */
 export async function fetchZoomUser(accessToken: string) {
   const res = await fetch(`${API_BASE}/users/me`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
-  if (!res.ok) throw new Error(`fetch_me_failed:${res.status}`);
+  if (!res.ok) {
+    const body = await res.text().catch(() => "(no body)");
+    console.error(
+      `fetchZoomUser failed: ${res.status} ${res.statusText} — body: ${body}`
+    );
+    throw new Error(`fetch_me_failed:${res.status}:${body.slice(0, 200)}`);
+  }
   return res.json() as Promise<{
     id: string;
     account_id: string;

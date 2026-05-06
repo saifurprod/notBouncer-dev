@@ -51,13 +51,20 @@ export async function GET(req: NextRequest) {
     scope: string;
   };
 
-  const me = await fetchZoomUser(tokens.access_token);
+  let me;
+  try {
+    me = await fetchZoomUser(tokens.access_token);
+  } catch (err: any) {
+    console.error("fetchZoomUser failed:", err?.message);
+    return NextResponse.redirect(
+      new URL("/?error=fetch_user", req.nextUrl.origin)
+    );
+  }
 
   const encryptedAccess = encryptToken(tokens.access_token);
   const encryptedRefresh = encryptToken(tokens.refresh_token);
   const expiresAt = new Date(Date.now() + tokens.expires_in * 1000);
 
-  // Upsert user + token in a single transaction
   await prisma.$transaction(async (tx) => {
     const user = await tx.user.upsert({
       where: { zoomUserId: me.id },

@@ -1,10 +1,7 @@
 import crypto from "crypto";
 
-// MVP NOTE:
-// The full spec (section 4.9) uses AWS KMS envelope encryption with per-record
-// data encryption keys. For the personal-demo MVP, we use a single AES-256-GCM
-// key stored in an env var. This is FINE for a personal dev account but MUST
-// be replaced with KMS before any public/multi-tenant deployment.
+// MVP NOTE: Single AES-256-GCM key from env. Replace with KMS envelope
+// encryption (spec section 4.9) before any public/multi-tenant deployment.
 
 const KEY_B64 = process.env.TOKEN_ENCRYPTION_KEY;
 
@@ -22,7 +19,6 @@ function getKey(): Buffer {
   return key;
 }
 
-/** Encrypts plaintext to base64(iv ‖ tag ‖ ciphertext). */
 export function encryptToken(plaintext: string): string {
   const key = getKey();
   const iv = crypto.randomBytes(12);
@@ -32,7 +28,6 @@ export function encryptToken(plaintext: string): string {
   return Buffer.concat([iv, tag, ct]).toString("base64");
 }
 
-/** Decrypts base64(iv ‖ tag ‖ ciphertext) back to plaintext. */
 export function decryptToken(blobB64: string): string {
   const key = getKey();
   const blob = Buffer.from(blobB64, "base64");

@@ -7,12 +7,9 @@ export default async function DashboardPage({
 }: {
   searchParams: { installed?: string };
 }) {
-  // For MVP, just show all audit logs across all users (you're the only one).
-  // When auth is added, scope by session.user.id.
   const logs = await prisma.auditLog.findMany({
     orderBy: { createdAt: "desc" },
-    take: 50,
-    include: { user: { select: { email: true, displayName: true } } },
+    take: 100,
   });
 
   const users = await prisma.user.findMany({
@@ -21,6 +18,13 @@ export default async function DashboardPage({
   });
 
   const justInstalled = searchParams.installed === "1";
+
+  // Stats
+  const totalDetected = logs.filter(
+    (l) => l.action === "detected" || l.action === "removed"
+  ).length;
+  const totalRemoved = logs.filter((l) => l.action === "removed").length;
+  const totalFailed = logs.filter((l) => l.action === "remove_failed").length;
 
   return (
     <main className="min-h-screen px-6 py-12 max-w-5xl mx-auto">
@@ -38,11 +42,19 @@ export default async function DashboardPage({
 
       {justInstalled && (
         <div className="mb-10 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-          ✓ Installed successfully. Start a Zoom meeting and invite a notetaker
-          bot to test.
+          ✓ Installed successfully. Open NoteBouncer from Zoom's Apps panel
+          during a meeting to enable auto-removal of bots.
         </div>
       )}
 
+      {/* Stats */}
+      <section className="mb-12 grid grid-cols-3 gap-4">
+        <Stat label="Bots detected" value={totalDetected} />
+        <Stat label="Removed by sidebar" value={totalRemoved} accent="emerald" />
+        <Stat label="Removal failed" value={totalFailed} accent="red" />
+      </section>
+
+      {/* Hosts */}
       <section className="mb-12">
         <h2 className="font-display text-2xl mb-4">Connected hosts</h2>
         {users.length === 0 ? (
@@ -69,15 +81,16 @@ export default async function DashboardPage({
         )}
       </section>
 
+      {/* Activity */}
       <section>
-        <h2 className="font-display text-2xl mb-4">Recent removals</h2>
+        <h2 className="font-display text-2xl mb-4">Activity</h2>
         {logs.length === 0 ? (
           <div className="rounded-md border border-dashed border-stone-300 bg-white px-6 py-12 text-center">
             <p className="font-display text-xl text-stone-700">
               No bots have crashed your meetings yet.
             </p>
             <p className="mt-2 text-sm text-stone-500">
-              When a notetaker joins, you'll see it here.
+              When a notetaker joins one of your meetings, you'll see it here.
             </p>
           </div>
         ) : (
@@ -97,6 +110,9 @@ export default async function DashboardPage({
                   <th className="px-4 py-3 text-left font-medium text-stone-700">
                     Action
                   </th>
+                  <th className="px-4 py-3 text-left font-medium text-stone-700">
+                    Source
+                  </th>
                   <th className="px-4 py-3 text-right font-medium text-stone-700">
                     Latency
                   </th>
@@ -106,7 +122,10 @@ export default async function DashboardPage({
                 {logs.map((log) => (
                   <tr key={String(log.id)}>
                     <td className="px-4 py-3 text-stone-500 font-mono text-xs whitespace-nowrap">
-                      {log.createdAt.toISOString().slice(0, 19).replace("T", " ")}
+                      {log.createdAt
+                        .toISOString()
+                        .slice(0, 19)
+                        .replace("T", " ")}
                     </td>
                     <td className="px-4 py-3">
                       <div className="font-medium">
@@ -123,6 +142,14 @@ export default async function DashboardPage({
                     </td>
                     <td className="px-4 py-3">
                       <ActionBadge action={log.action} />
+                      {log.errorMessage && (
+                        <div className="text-xs text-red-600 mt-1 max-w-xs truncate">
+                          {log.errorMessage}
+                        </div>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-xs text-stone-500 font-mono">
+                      {log.source}
                     </td>
                     <td className="px-4 py-3 text-right font-mono text-xs text-stone-500">
                       {log.latencyMs ? `${log.latencyMs}ms` : "—"}
@@ -138,19 +165,44 @@ export default async function DashboardPage({
   );
 }
 
+function Stat({
+  label,
+  value,
+  accent,
+}: {
+  label: string;
+  value: number;
+  accent?: "emerald" | "red";
+}) {
+  const valueColor =
+    accent === "emerald"
+      ? "text-emerald-700"
+      : accent === "red"
+        ? "text-red-700"
+        : "text-stone-900";
+  return (
+    <div className="bg-white border border-stone-200 rounded-md p-4">
+      <div className="text-xs uppercase tracking-wider text-stone-500 mb-1">
+        {label}
+      </div>
+      <div className={`font-display text-3xl ${valueColor}`}>{value}</div>
+    </div>
+  );
+}
+
 function ActionBadge({ action }: { action: string }) {
   const styles: Record<string, string> = {
+    detected: "bg-amber-50 text-amber-700 border-amber-200",
     removed: "bg-emerald-50 text-emerald-700 border-emerald-200",
-    dry_run: "bg-amber-50 text-amber-700 border-amber-200",
-    failed: "bg-red-50 text-red-700 border-red-200",
+    remove_failed: "bg-red-50 text-red-700 border-red-200",
+    dry_run: "bg-stone-50 text-stone-700 border-stone-200",
   };
-  const cls =
-    styles[action] ?? "bg-stone-50 text-stone-700 border-stone-200";
+  const cls = styles[action] ?? "bg-stone-50 text-stone-700 border-stone-200";
   return (
     <span
       className={`inline-flex items-center rounded border px-2 py-0.5 font-mono text-xs ${cls}`}
     >
-      {action}
+      {action.replace(/_/g, " ")}
     </span>
   );
 }

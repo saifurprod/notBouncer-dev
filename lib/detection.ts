@@ -1,6 +1,5 @@
 // Detection module — pure, no I/O, fully unit-testable.
-// Adapted from spec section 4.2. Verify the regex/domain lists against the
-// real bot landscape periodically; vendors do rename to evade detection.
+// Used by both the webhook handler (server) and the sidebar (client).
 
 export type Participant = {
   name: string;
@@ -21,7 +20,6 @@ export type DetectionResult =
   | { match: false }
   | { match: true; reason: string; confidence: "high" | "medium" };
 
-// Default config used by MVP — host can override later via dashboard
 export const DEFAULT_CONFIG: DetectionConfig = {
   strictness: "balanced",
   customBlocklistNames: [],
@@ -68,7 +66,6 @@ export function detect(p: Participant, cfg: DetectionConfig): DetectionResult {
   const name = (p.name || "").trim();
   const email = (p.email || "").toLowerCase().trim();
 
-  // Allowlist takes precedence
   if (cfg.allowlistNames.some((n) => n.toLowerCase() === name.toLowerCase())) {
     return { match: false };
   }
@@ -76,7 +73,6 @@ export function detect(p: Participant, cfg: DetectionConfig): DetectionResult {
     return { match: false };
   }
 
-  // Email domain blocklist (highest signal)
   const domain = email.split("@")[1];
   if (domain) {
     if (
@@ -87,21 +83,18 @@ export function detect(p: Participant, cfg: DetectionConfig): DetectionResult {
     }
   }
 
-  // Name regex match
   for (const { re, label } of DEFAULT_NAME_PATTERNS) {
     if (re.test(name)) {
       return { match: true, reason: label, confidence: "high" };
     }
   }
 
-  // Custom name blocklist (substring match)
   for (const term of cfg.customBlocklistNames) {
     if (term && name.toLowerCase().includes(term.toLowerCase())) {
       return { match: true, reason: `name:custom:${term}`, confidence: "high" };
     }
   }
 
-  // Strict mode: catch generic bot/ai/assistant keywords on guest participants
   if (cfg.strictness === "strict") {
     if (p.isGuest && /\b(bot|ai|assistant|recorder|transcriber)\b/i.test(name)) {
       return {

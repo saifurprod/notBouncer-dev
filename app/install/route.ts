@@ -18,7 +18,7 @@ export async function GET(_req: NextRequest) {
     httpOnly: true,
     secure: true,
     sameSite: "lax",
-    maxAge: 600, // 10 minutes
+    maxAge: 600,
     path: "/",
   });
 
