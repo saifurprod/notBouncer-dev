@@ -133,7 +133,7 @@ export default function ZoomHomePage() {
             name,
             reason: result.reason,
             at: detectedAt,
-            status: "failed",
+            status: "failed" as const,
             error: msg,
           },
           ...prev,
