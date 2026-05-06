@@ -110,7 +110,7 @@ export default function ZoomHomePage() {
             name,
             reason: result.reason,
             at: detectedAt,
-            status: "removed",
+            status: "removed" as const,
           },
           ...prev,
         ].slice(0, 50)
