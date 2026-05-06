@@ -104,7 +104,7 @@ URL.
 
 ### Step 2.2 — Note your production URL
 
-Once deployed, Vercel shows you the URL. It looks like:
+Once deployed, Vercel shows you the URL. It looks like: 
 
 ```
 https://notebouncer-mvp-yourusername.vercel.app
