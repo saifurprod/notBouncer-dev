@@ -4,7 +4,6 @@ import { prisma } from "@/lib/db";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// Handle CORS preflight
 export async function OPTIONS() {
   return new NextResponse(null, { status: 204 });
 }
@@ -13,7 +12,7 @@ export async function OPTIONS() {
  * Sidebar reports events here: bot detections and removals it performed.
  *
  * Body: {
- *   zoomUserId: string,       // host's Zoom user ID
+ *   zoomUserId?: string,        // host's Zoom user ID (optional for MVP)
  *   meetingId: string,
  *   meetingUuid?: string,
  *   participantName: string,
@@ -25,9 +24,10 @@ export async function OPTIONS() {
  *   latencyMs?: number,
  * }
  *
- * Auth: For MVP, we trust the body's zoomUserId. Production should verify
- * the Zoom App context token (spec section 4.8) — that's a hardening task
- * for later.
+ * MVP single-host fallback: if zoomUserId isn't provided (the SDK doesn't
+ * always return user identity reliably), attribute to the most recently
+ * installed user. This is fine for personal demos — replace with proper
+ * Zoom App context token verification (spec section 4.8) before multi-user.
  */
 export async function POST(req: NextRequest) {
   let body: any;
@@ -50,16 +50,30 @@ export async function POST(req: NextRequest) {
     latencyMs,
   } = body ?? {};
 
-  if (!zoomUserId || !meetingId || !matchReason || !action) {
+  if (!meetingId || !matchReason || !action) {
     return NextResponse.json(
       { error: "missing_required_fields" },
       { status: 400 }
     );
   }
 
-  const user = await prisma.user.findUnique({ where: { zoomUserId } });
-  if (!user || user.deauthorizedAt) {
-    return NextResponse.json({ error: "user_not_found" }, { status: 404 });
+  // Find the user. Prefer matching by zoomUserId if provided; otherwise
+  // fall back to the most recently installed active user (single-host MVP).
+  let user = null;
+  if (zoomUserId) {
+    user = await prisma.user.findUnique({ where: { zoomUserId } });
+  }
+  if (!user) {
+    user = await prisma.user.findFirst({
+      where: { deauthorizedAt: null },
+      orderBy: { installedAt: "desc" },
+    });
+  }
+  if (!user) {
+    return NextResponse.json(
+      { error: "no_active_user_found" },
+      { status: 404 }
+    );
   }
 
   await prisma.auditLog.create({
@@ -79,7 +93,7 @@ export async function POST(req: NextRequest) {
   });
 
   console.log(
-    `Sidebar event: ${action} ${participantName} in meeting ${meetingId}`
+    `Sidebar event: ${action} ${participantName} in meeting ${meetingId} (user: ${user.email})`
   );
 
   return NextResponse.json({ ok: true });

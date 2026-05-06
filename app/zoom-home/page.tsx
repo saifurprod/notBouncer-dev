@@ -51,19 +51,20 @@ export default function ZoomHomePage() {
     errorMessage?: string;
     latencyMs?: number;
   }) {
-    if (!userIdRef.current) {
-      appendLog("warn", "Cannot sync event: user ID not yet known");
-      return;
-    }
     try {
-      await fetch("/api/sidebar/event", {
+      const res = await fetch("/api/sidebar/event", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          // zoomUserId is optional — server falls back to single-host
           zoomUserId: userIdRef.current,
           ...payload,
         }),
       });
+      if (!res.ok) {
+        const errText = await res.text().catch(() => "");
+        appendLog("warn", `Sync HTTP ${res.status}: ${errText.slice(0, 100)}`);
+      }
     } catch (err) {
       appendLog("warn", `Sync failed: ${(err as Error).message}`);
     }
