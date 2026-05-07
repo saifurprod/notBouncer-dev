@@ -240,6 +240,66 @@ export default function ZoomHomePage() {
     appendLog("info", `Bulk action complete`);
   }
 
+  // Read waiting room state from SDK. Tries every plausible response shape
+  // and logs the raw response so we can see exactly what Zoom sent back.
+  async function refreshWaitingRoomState() {
+    const sdk = sdkRef.current;
+    if (!sdk) return;
+    try {
+      const wrState: any = await sdk.getWaitingRoomState();
+      // Log the raw shape so we can see what Zoom actually returns on
+      // this particular client/version
+      appendLog(
+        "info",
+        `Waiting room raw: ${JSON.stringify(wrState).slice(0, 200)}`
+      );
+      // Try every field name the SDK has used historically
+      const candidates = [
+        wrState?.enabled,
+        wrState?.isEnabled,
+        wrState?.state,
+        wrState?.waitingRoom,
+        wrState?.waitingRoomEnabled,
+        wrState?.status,
+      ];
+      let enabled: boolean | null = null;
+      for (const c of candidates) {
+        if (typeof c === "boolean") {
+          enabled = c;
+          break;
+        }
+        if (typeof c === "string") {
+          enabled = c.toLowerCase() === "enabled" || c.toLowerCase() === "on" || c === "true";
+          break;
+        }
+      }
+      // Bare boolean response
+      if (enabled === null && typeof wrState === "boolean") {
+        enabled = wrState;
+      }
+      // If SDK returned anything truthy at all and we couldn't parse,
+      // err on the side of "enabled" — the user said it's on
+      if (enabled === null && wrState && typeof wrState === "object") {
+        appendLog(
+          "warn",
+          "Waiting room state shape unrecognized; defaulting to enabled"
+        );
+        enabled = true;
+      }
+      setWaitingRoomEnabled(enabled);
+      appendLog(
+        enabled === true ? "success" : enabled === false ? "warn" : "info",
+        `Waiting room: ${enabled === true ? "enabled" : enabled === false ? "disabled" : "unknown"}`
+      );
+    } catch (err: any) {
+      appendLog(
+        "warn",
+        `Couldn't read waiting room state: ${err?.message ?? err}`
+      );
+      setWaitingRoomEnabled(null);
+    }
+  }
+
   function clearResolved() {
     setDetectedBots((prev) =>
       prev.filter((b) => b.status !== "removed" && b.status !== "waiting")
@@ -295,21 +355,8 @@ export default function ZoomHomePage() {
 
         setStatus({ kind: "in_meeting", meetingTopic });
 
-        // Check waiting room state
-        try {
-          const wrState: any = await zoomSdk.getWaitingRoomState();
-          // SDK returns { enabled: boolean } or similar shape
-          const enabled =
-            wrState?.enabled ?? wrState?.state ?? wrState?.isEnabled;
-          setWaitingRoomEnabled(!!enabled);
-          appendLog(
-            "info",
-            `Waiting room: ${enabled ? "enabled" : "disabled"}`
-          );
-        } catch (err) {
-          appendLog("warn", `Couldn't read waiting room state: ${err}`);
-          setWaitingRoomEnabled(null);
-        }
+        // Check waiting room state initially
+        await refreshWaitingRoomState();
 
         // Get current participants and detect
         try {
@@ -401,9 +448,18 @@ export default function ZoomHomePage() {
         <>
           {/* Action mode toggle */}
           <section className="mb-4">
-            <h2 className="text-xs font-medium uppercase tracking-wider text-stone-500 mb-2">
-              Action when removing
-            </h2>
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <h2 className="text-xs font-medium uppercase tracking-wider text-stone-500">
+                Action when removing
+              </h2>
+              <button
+                onClick={refreshWaitingRoomState}
+                className="text-xs text-stone-500 hover:text-stone-800 underline"
+                title="Re-check waiting room state from Zoom"
+              >
+                Recheck
+              </button>
+            </div>
             <div className="flex bg-stone-100 rounded-md p-1 gap-1">
               <ToggleButton
                 active={actionMode === "remove"}
@@ -426,7 +482,14 @@ export default function ZoomHomePage() {
             </div>
             {!waitingRoomSelectable && (
               <p className="text-xs text-stone-500 mt-1.5">
-                Enable waiting room in Zoom's Security menu to use this option.
+                Waiting room appears disabled. If you just enabled it, click{" "}
+                <button
+                  onClick={refreshWaitingRoomState}
+                  className="underline hover:text-stone-800"
+                >
+                  Recheck
+                </button>
+                .
               </p>
             )}
           </section>
