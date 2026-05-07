@@ -21,9 +21,15 @@ export default async function DashboardPage({
 
   // Stats
   const totalDetected = logs.filter(
-    (l) => l.action === "detected" || l.action === "removed"
+    (l) =>
+      l.action === "detected" ||
+      l.action === "removed" ||
+      l.action === "moved_to_waiting_room"
   ).length;
   const totalRemoved = logs.filter((l) => l.action === "removed").length;
+  const totalWaitingRoom = logs.filter(
+    (l) => l.action === "moved_to_waiting_room"
+  ).length;
   const totalFailed = logs.filter((l) => l.action === "remove_failed").length;
 
   return (
@@ -48,10 +54,11 @@ export default async function DashboardPage({
       )}
 
       {/* Stats */}
-      <section className="mb-12 grid grid-cols-3 gap-4">
+      <section className="mb-12 grid grid-cols-2 md:grid-cols-4 gap-4">
         <Stat label="Bots detected" value={totalDetected} />
-        <Stat label="Removed by sidebar" value={totalRemoved} accent="emerald" />
-        <Stat label="Removal failed" value={totalFailed} accent="red" />
+        <Stat label="Removed" value={totalRemoved} accent="emerald" />
+        <Stat label="Sent to waiting" value={totalWaitingRoom} accent="blue" />
+        <Stat label="Failed" value={totalFailed} accent="red" />
       </section>
 
       {/* Hosts */}
@@ -172,14 +179,16 @@ function Stat({
 }: {
   label: string;
   value: number;
-  accent?: "emerald" | "red";
+  accent?: "emerald" | "red" | "blue";
 }) {
   const valueColor =
     accent === "emerald"
       ? "text-emerald-700"
       : accent === "red"
         ? "text-red-700"
-        : "text-stone-900";
+        : accent === "blue"
+          ? "text-blue-700"
+          : "text-stone-900";
   return (
     <div className="bg-white border border-stone-200 rounded-md p-4">
       <div className="text-xs uppercase tracking-wider text-stone-500 mb-1">
@@ -194,6 +203,7 @@ function ActionBadge({ action }: { action: string }) {
   const styles: Record<string, string> = {
     detected: "bg-amber-50 text-amber-700 border-amber-200",
     removed: "bg-emerald-50 text-emerald-700 border-emerald-200",
+    moved_to_waiting_room: "bg-blue-50 text-blue-700 border-blue-200",
     remove_failed: "bg-red-50 text-red-700 border-red-200",
     dry_run: "bg-stone-50 text-stone-700 border-stone-200",
   };

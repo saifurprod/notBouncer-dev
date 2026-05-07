@@ -16,8 +16,8 @@ type LogEntry = {
   text: string;
 };
 
-// A bot we've detected. Stays in the list until the host removes it
-// (or removal fails). status tracks the lifecycle.
+type ActionMode = "remove" | "waiting_room";
+
 type DetectedBot = {
   participantUUID: string;
   name: string;
@@ -25,10 +25,11 @@ type DetectedBot = {
   reason: string;
   detectedAt: number;
   // pending: not yet acted on
-  // removing: removal in flight
-  // removed: successfully kicked
+  // acting: action in flight
+  // removed: kicked from meeting
+  // waiting: moved to waiting room
   // failed: tried and failed
-  status: "pending" | "removing" | "removed" | "failed";
+  status: "pending" | "acting" | "removed" | "waiting" | "failed";
   errorMessage?: string;
 };
 
@@ -37,7 +38,9 @@ export default function ZoomHomePage() {
   const [participants, setParticipants] = useState<any[]>([]);
   const [detectedBots, setDetectedBots] = useState<DetectedBot[]>([]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [bulkRemoving, setBulkRemoving] = useState(false);
+  const [bulkRunning, setBulkRunning] = useState(false);
+  const [actionMode, setActionMode] = useState<ActionMode>("remove");
+  const [waitingRoomEnabled, setWaitingRoomEnabled] = useState<boolean | null>(null);
   const [config] = useState<DetectionConfig>(DEFAULT_CONFIG);
   const userIdRef = useRef<string | null>(null);
   const sdkRef = useRef<any>(null);
@@ -57,7 +60,7 @@ export default function ZoomHomePage() {
     participantEmail?: string;
     participantZoomId?: string;
     matchReason: string;
-    action: "detected" | "removed" | "remove_failed";
+    action: "detected" | "removed" | "moved_to_waiting_room" | "remove_failed";
     errorMessage?: string;
     latencyMs?: number;
   }) {
@@ -82,15 +85,13 @@ export default function ZoomHomePage() {
     }
   }
 
-  // When a participant joins/exists: detect, log, and add to the pending list.
-  // Does NOT remove — that's manual.
+  // Detect a participant — does not act, just adds to pending list
   async function detectParticipant(p: any) {
     const name = p.screenName ?? p.userName ?? p.displayName ?? "";
     const email = p.email ?? null;
     const uuid = p.participantUUID ?? p.userId;
     if (!name || !uuid) return;
 
-    // Avoid duplicate entries if the SDK fires the same join twice
     if (detectedUUIDsRef.current.has(uuid)) return;
 
     const result = detect(
@@ -114,7 +115,6 @@ export default function ZoomHomePage() {
       },
     ]);
 
-    // Log detection to the dashboard
     await syncEvent({
       participantName: name,
       participantEmail: email ?? undefined,
@@ -124,21 +124,19 @@ export default function ZoomHomePage() {
     });
   }
 
-  // Remove a single bot via the SDK. Updates state and syncs result.
-  async function removeBot(bot: DetectedBot) {
+  // Act on a single bot using the current actionMode
+  async function actOnBot(bot: DetectedBot, mode: ActionMode) {
     const sdk = sdkRef.current;
     if (!sdk) {
-      appendLog("error", "SDK not available — can't remove");
+      appendLog("error", "SDK not available");
       return;
     }
-
-    // Don't double-remove
     if (bot.status !== "pending" && bot.status !== "failed") return;
 
     setDetectedBots((prev) =>
       prev.map((b) =>
         b.participantUUID === bot.participantUUID
-          ? { ...b, status: "removing" as const, errorMessage: undefined }
+          ? { ...b, status: "acting" as const, errorMessage: undefined }
           : b
       )
     );
@@ -146,29 +144,54 @@ export default function ZoomHomePage() {
     const startedAt = Date.now();
 
     try {
-      await sdk.removeParticipant({ participantUUID: bot.participantUUID });
-      const latencyMs = Date.now() - startedAt;
-      appendLog("success", `Removed: ${bot.name} (${latencyMs}ms)`);
+      if (mode === "remove") {
+        await sdk.removeParticipant({ participantUUID: bot.participantUUID });
+        const latencyMs = Date.now() - startedAt;
+        appendLog("success", `Removed: ${bot.name} (${latencyMs}ms)`);
 
-      setDetectedBots((prev) =>
-        prev.map((b) =>
-          b.participantUUID === bot.participantUUID
-            ? { ...b, status: "removed" as const }
-            : b
-        )
-      );
+        setDetectedBots((prev) =>
+          prev.map((b) =>
+            b.participantUUID === bot.participantUUID
+              ? { ...b, status: "removed" as const }
+              : b
+          )
+        );
 
-      await syncEvent({
-        participantName: bot.name,
-        participantEmail: bot.email ?? undefined,
-        participantZoomId: bot.participantUUID,
-        matchReason: bot.reason,
-        action: "removed",
-        latencyMs,
-      });
+        await syncEvent({
+          participantName: bot.name,
+          participantEmail: bot.email ?? undefined,
+          participantZoomId: bot.participantUUID,
+          matchReason: bot.reason,
+          action: "removed",
+          latencyMs,
+        });
+      } else {
+        await sdk.putParticipantToWaitingRoom({
+          participantUUID: bot.participantUUID,
+        });
+        const latencyMs = Date.now() - startedAt;
+        appendLog("success", `Sent to waiting room: ${bot.name} (${latencyMs}ms)`);
+
+        setDetectedBots((prev) =>
+          prev.map((b) =>
+            b.participantUUID === bot.participantUUID
+              ? { ...b, status: "waiting" as const }
+              : b
+          )
+        );
+
+        await syncEvent({
+          participantName: bot.name,
+          participantEmail: bot.email ?? undefined,
+          participantZoomId: bot.participantUUID,
+          matchReason: bot.reason,
+          action: "moved_to_waiting_room",
+          latencyMs,
+        });
+      }
     } catch (err: any) {
       const msg = err?.message ?? String(err);
-      appendLog("error", `Remove failed for ${bot.name}: ${msg}`);
+      appendLog("error", `Action failed for ${bot.name}: ${msg}`);
 
       setDetectedBots((prev) =>
         prev.map((b) =>
@@ -184,31 +207,43 @@ export default function ZoomHomePage() {
         participantZoomId: bot.participantUUID,
         matchReason: bot.reason,
         action: "remove_failed",
-        errorMessage: msg,
+        errorMessage: `${mode}: ${msg}`,
       });
     }
   }
 
-  // Remove all pending bots in sequence
-  async function removeAllPending() {
+  // Act on all pending bots using current actionMode
+  async function actOnAllPending() {
     const pending = detectedBots.filter(
       (b) => b.status === "pending" || b.status === "failed"
     );
     if (pending.length === 0) return;
 
-    setBulkRemoving(true);
-    appendLog("info", `Removing ${pending.length} bot(s)…`);
-
-    for (const bot of pending) {
-      await removeBot(bot);
+    // If sending to waiting room but it's off, stop and tell the host
+    if (actionMode === "waiting_room" && waitingRoomEnabled === false) {
+      appendLog(
+        "error",
+        "Waiting room is disabled in this meeting. Enable it in Zoom's security menu first, or switch to 'remove from meeting'."
+      );
+      return;
     }
 
-    setBulkRemoving(false);
-    appendLog("info", `Bulk removal complete`);
+    setBulkRunning(true);
+    const verb = actionMode === "remove" ? "Removing" : "Sending to waiting room";
+    appendLog("info", `${verb} ${pending.length} bot(s)…`);
+
+    for (const bot of pending) {
+      await actOnBot(bot, actionMode);
+    }
+
+    setBulkRunning(false);
+    appendLog("info", `Bulk action complete`);
   }
 
-  function clearRemoved() {
-    setDetectedBots((prev) => prev.filter((b) => b.status !== "removed"));
+  function clearResolved() {
+    setDetectedBots((prev) =>
+      prev.filter((b) => b.status !== "removed" && b.status !== "waiting")
+    );
   }
 
   useEffect(() => {
@@ -226,6 +261,8 @@ export default function ZoomHomePage() {
             "getMeetingContext",
             "getMeetingParticipants",
             "removeParticipant",
+            "putParticipantToWaitingRoom",
+            "getWaitingRoomState",
             "onParticipantChange",
           ],
         });
@@ -258,7 +295,23 @@ export default function ZoomHomePage() {
 
         setStatus({ kind: "in_meeting", meetingTopic });
 
-        // Get current participants and run detection
+        // Check waiting room state
+        try {
+          const wrState: any = await zoomSdk.getWaitingRoomState();
+          // SDK returns { enabled: boolean } or similar shape
+          const enabled =
+            wrState?.enabled ?? wrState?.state ?? wrState?.isEnabled;
+          setWaitingRoomEnabled(!!enabled);
+          appendLog(
+            "info",
+            `Waiting room: ${enabled ? "enabled" : "disabled"}`
+          );
+        } catch (err) {
+          appendLog("warn", `Couldn't read waiting room state: ${err}`);
+          setWaitingRoomEnabled(null);
+        }
+
+        // Get current participants and detect
         try {
           const result: any = await zoomSdk.getMeetingParticipants();
           const list = result?.participants ?? [];
@@ -271,7 +324,6 @@ export default function ZoomHomePage() {
           appendLog("warn", `Couldn't fetch participants: ${err}`);
         }
 
-        // Subscribe to participant changes
         zoomSdk.addEventListener(
           "onParticipantChange",
           async (event: any) => {
@@ -324,7 +376,13 @@ export default function ZoomHomePage() {
   const pendingCount = detectedBots.filter(
     (b) => b.status === "pending" || b.status === "failed"
   ).length;
-  const removedCount = detectedBots.filter((b) => b.status === "removed").length;
+  const resolvedCount = detectedBots.filter(
+    (b) => b.status === "removed" || b.status === "waiting"
+  ).length;
+
+  // Whether the waiting-room mode is selectable. If the SDK couldn't read
+  // the state (null), we still allow it — call may succeed.
+  const waitingRoomSelectable = waitingRoomEnabled !== false;
 
   return (
     <main className="min-h-screen bg-stone-50 text-stone-900 p-5 font-sans">
@@ -341,18 +399,50 @@ export default function ZoomHomePage() {
 
       {status.kind === "in_meeting" && (
         <>
-          {/* Bulk action */}
+          {/* Action mode toggle */}
+          <section className="mb-4">
+            <h2 className="text-xs font-medium uppercase tracking-wider text-stone-500 mb-2">
+              Action when removing
+            </h2>
+            <div className="flex bg-stone-100 rounded-md p-1 gap-1">
+              <ToggleButton
+                active={actionMode === "remove"}
+                onClick={() => setActionMode("remove")}
+                label="Remove from meeting"
+              />
+              <ToggleButton
+                active={actionMode === "waiting_room"}
+                onClick={() => {
+                  if (waitingRoomSelectable) setActionMode("waiting_room");
+                }}
+                label="Send to waiting room"
+                disabled={!waitingRoomSelectable}
+                title={
+                  !waitingRoomSelectable
+                    ? "Waiting room is disabled in this meeting"
+                    : undefined
+                }
+              />
+            </div>
+            {!waitingRoomSelectable && (
+              <p className="text-xs text-stone-500 mt-1.5">
+                Enable waiting room in Zoom's Security menu to use this option.
+              </p>
+            )}
+          </section>
+
+          {/* Detected bots */}
           <section className="mb-4">
             <div className="flex items-center justify-between gap-2 mb-2">
               <h2 className="text-xs font-medium uppercase tracking-wider text-stone-500">
                 Detected bots ({pendingCount} pending)
               </h2>
-              {removedCount > 0 && (
+              {resolvedCount > 0 && (
                 <button
-                  onClick={clearRemoved}
+                  onClick={clearResolved}
                   className="text-xs text-stone-500 hover:text-stone-800 underline"
                 >
-                  Clear removed
+                  Clear resolved
                 </button>
               )}
             </div>
@@ -365,13 +455,19 @@ export default function ZoomHomePage() {
               <>
                 {pendingCount > 0 && (
                   <button
-                    onClick={removeAllPending}
-                    disabled={bulkRemoving}
-                    className="w-full mb-2 rounded-md bg-red-600 hover:bg-red-700 disabled:bg-stone-400 disabled:cursor-not-allowed text-white text-sm font-medium py-2 px-3 transition"
+                    onClick={actOnAllPending}
+                    disabled={bulkRunning}
+                    className={`w-full mb-2 rounded-md text-white text-sm font-medium py-2 px-3 transition ${
+                      actionMode === "remove"
+                        ? "bg-red-600 hover:bg-red-700"
+                        : "bg-amber-600 hover:bg-amber-700"
+                    } disabled:bg-stone-400 disabled:cursor-not-allowed`}
                   >
-                    {bulkRemoving
-                      ? `Removing…`
-                      : `Remove all bots (${pendingCount})`}
+                    {bulkRunning
+                      ? "Working…"
+                      : actionMode === "remove"
+                        ? `Remove all bots (${pendingCount})`
+                        : `Send all to waiting room (${pendingCount})`}
                   </button>
                 )}
 
@@ -397,8 +493,9 @@ export default function ZoomHomePage() {
                         </div>
                         <BotAction
                           bot={bot}
-                          onRemove={() => removeBot(bot)}
-                          disabled={bulkRemoving}
+                          actionMode={actionMode}
+                          onAct={() => actOnBot(bot, actionMode)}
+                          disabled={bulkRunning}
                         />
                       </div>
                     </li>
@@ -408,7 +505,6 @@ export default function ZoomHomePage() {
             )}
           </section>
 
-          {/* All participants (read-only) */}
           <section className="mb-4">
             <h2 className="text-xs font-medium uppercase tracking-wider text-stone-500 mb-2">
               In meeting ({participants.length})
@@ -428,7 +524,6 @@ export default function ZoomHomePage() {
         </>
       )}
 
-      {/* Activity log */}
       <section>
         <h2 className="text-xs font-medium uppercase tracking-wider text-stone-500 mb-2">
           Activity log
@@ -491,13 +586,44 @@ function StatusBadge({ status }: { status: Status }) {
   );
 }
 
+function ToggleButton({
+  active,
+  onClick,
+  label,
+  disabled,
+  title,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+  disabled?: boolean;
+  title?: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      className={`flex-1 text-xs font-medium py-1.5 px-2 rounded transition ${
+        active
+          ? "bg-white text-stone-900 shadow-sm"
+          : "text-stone-600 hover:text-stone-900"
+      } ${disabled ? "opacity-40 cursor-not-allowed" : ""}`}
+    >
+      {label}
+    </button>
+  );
+}
+
 function cardColor(s: DetectedBot["status"]): string {
   switch (s) {
     case "pending":
       return "bg-amber-50 border-amber-200";
-    case "removing":
+    case "acting":
       return "bg-blue-50 border-blue-200";
     case "removed":
+      return "bg-emerald-50 border-emerald-200";
+    case "waiting":
       return "bg-emerald-50 border-emerald-200";
     case "failed":
       return "bg-red-50 border-red-200";
@@ -506,11 +632,13 @@ function cardColor(s: DetectedBot["status"]): string {
 
 function BotAction({
   bot,
-  onRemove,
+  actionMode,
+  onAct,
   disabled,
 }: {
   bot: DetectedBot;
-  onRemove: () => void;
+  actionMode: ActionMode;
+  onAct: () => void;
   disabled: boolean;
 }) {
   if (bot.status === "removed") {
@@ -520,20 +648,37 @@ function BotAction({
       </span>
     );
   }
-  if (bot.status === "removing") {
+  if (bot.status === "waiting") {
     return (
-      <span className="text-xs font-mono text-blue-700 whitespace-nowrap">
-        removing…
+      <span className="text-xs font-mono text-emerald-700 whitespace-nowrap">
+        ✓ waiting
       </span>
     );
   }
+  if (bot.status === "acting") {
+    return (
+      <span className="text-xs font-mono text-blue-700 whitespace-nowrap">
+        working…
+      </span>
+    );
+  }
+  const label =
+    bot.status === "failed"
+      ? "Retry"
+      : actionMode === "remove"
+        ? "Remove"
+        : "Wait";
+  const cls =
+    actionMode === "remove"
+      ? "bg-stone-900 hover:bg-stone-700"
+      : "bg-amber-700 hover:bg-amber-800";
   return (
     <button
-      onClick={onRemove}
+      onClick={onAct}
       disabled={disabled}
-      className="text-xs font-medium px-2 py-1 rounded bg-stone-900 text-white hover:bg-stone-700 disabled:bg-stone-400 disabled:cursor-not-allowed transition whitespace-nowrap"
+      className={`text-xs font-medium px-2 py-1 rounded text-white transition whitespace-nowrap ${cls} disabled:bg-stone-400 disabled:cursor-not-allowed`}
     >
-      {bot.status === "failed" ? "Retry" : "Remove"}
+      {label}
     </button>
   );
 }
