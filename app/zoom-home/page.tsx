@@ -378,19 +378,32 @@ export default function ZoomHomePage() {
             for (const p of changes) {
               const name = p.screenName ?? p.userName ?? "?";
               const action = p.action ?? p.status;
+              const uuid = p.participantUUID;
               appendLog("info", `${action}: ${name}`);
 
-              setParticipants((prev) => {
-                if (action === "leave" || action === "left") {
-                  return prev.filter(
-                    (x) => x.participantUUID !== p.participantUUID
-                  );
-                }
-                const exists = prev.some(
-                  (x) => x.participantUUID === p.participantUUID
+              if (action === "leave" || action === "left") {
+                // Drop from current participants list
+                setParticipants((prev) =>
+                  prev.filter((x) => x.participantUUID !== uuid)
                 );
-                return exists ? prev : [...prev, p];
-              });
+                // CRITICAL: forget that we've detected this UUID, so if
+                // they re-join (after being admitted back from waiting
+                // room, or rejoining themselves) we detect them again.
+                detectedUUIDsRef.current.delete(uuid);
+                // Also drop the stale entry from the detected list so we
+                // don't keep a "removed" or "waiting" card around for a
+                // participant who isn't there anymore.
+                setDetectedBots((prev) =>
+                  prev.filter((b) => b.participantUUID !== uuid)
+                );
+              } else {
+                setParticipants((prev) => {
+                  const exists = prev.some(
+                    (x) => x.participantUUID === uuid
+                  );
+                  return exists ? prev : [...prev, p];
+                });
+              }
 
               if (action === "join" || action === "joined") {
                 await detectParticipant(p);
