@@ -28,12 +28,19 @@ export default async function DashboardPage({
       where: { deauthorizedAt: null },
       orderBy: { installedAt: "desc" },
     }),
+    // Sidebar-only view: webhook rows are kept in the database for future use
+    // (analytics, alerts, etc.) but hidden from the user-facing dashboard so
+    // each bot incident is reported once, from the source that can act on it.
     prisma.auditLog.findMany({
+      where: { source: "sidebar" },
       orderBy: { createdAt: "desc" },
       take: 1000,
     }),
     prisma.auditLog.findMany({
-      where: { createdAt: { gte: new Date(Date.now() - 48 * 60 * 60 * 1000) } },
+      where: {
+        source: "sidebar",
+        createdAt: { gte: new Date(Date.now() - 48 * 60 * 60 * 1000) },
+      },
     }),
   ]);
 
