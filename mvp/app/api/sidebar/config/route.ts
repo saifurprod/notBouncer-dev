@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { DEFAULT_CONFIG } from "@/lib/domain/detection";
+import { DEFAULT_CONFIG } from "@/lib/detection";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

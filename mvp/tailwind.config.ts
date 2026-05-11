@@ -1,11 +1,7 @@
 import type { Config } from "tailwindcss";
 
 const config: Config = {
-  content: [
-    "./app/**/*.{ts,tsx}",
-    "./components/**/*.{ts,tsx}",
-    "./lib/**/*.{ts,tsx}",
-  ],
+  content: ["./app/**/*.{ts,tsx}", "./lib/**/*.{ts,tsx}"],
   theme: {
     extend: {
       fontFamily: {
@@ -23,7 +19,7 @@ const config: Config = {
         },
         canvas: {
           lavender: "rgb(217, 219, 240)",
-          sand: "rgb(242, 240, 234)",
+          sand: "rgb(245, 241, 234)",
         },
         ink: {
           900: "rgb(41, 37, 36)",

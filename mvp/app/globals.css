@@ -12,7 +12,7 @@
 
   /* Canvases */
   --canvas-lavender: rgb(217, 219, 240);
-  --canvas-sand: rgb(242, 240, 234);
+  --canvas-sand: rgb(245, 241, 234);
 
   /* Ink */
   --ink-900: rgb(41, 37, 36);
@@ -68,7 +68,7 @@
   }
 
   body {
-    background: var(--canvas-sand);
+    background: var(--canvas-lavender);
   }
 }
 

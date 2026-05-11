@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/infra/db";
-import { encryptToken } from "@/lib/infra/crypto";
-import { fetchZoomUser } from "@/lib/infra/zoom";
+import { prisma } from "@/lib/db";
+import { encryptToken } from "@/lib/crypto";
+import { fetchZoomUser } from "@/lib/zoom";
 
 export async function GET(req: NextRequest) {
   const code = req.nextUrl.searchParams.get("code");

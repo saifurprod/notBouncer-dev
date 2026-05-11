@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
-import { prisma } from "@/lib/infra/db";
-import { detect, DEFAULT_CONFIG } from "@/lib/domain/detection";
+import { prisma } from "@/lib/db";
+import { detect, DEFAULT_CONFIG } from "@/lib/detection";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

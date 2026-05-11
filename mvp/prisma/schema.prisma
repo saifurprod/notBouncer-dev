@@ -1,0 +1,61 @@
+// NoteBouncer MVP schema (v0.2 - sidebar enabled)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id              String       @id @default(cuid())
+  zoomUserId      String       @unique
+  zoomAccountId   String
+  email           String
+  displayName     String?
+  installedAt     DateTime     @default(now())
+  deauthorizedAt  DateTime?
+
+  oauthToken      OauthToken?
+  auditLogs       AuditLog[]
+
+  @@map("users")
+}
+
+model OauthToken {
+  userId             String   @id
+  accessTokenCipher  String
+  refreshTokenCipher String
+  expiresAt          DateTime
+  scope              String
+  updatedAt          DateTime @updatedAt
+
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("oauth_tokens")
+}
+
+model AuditLog {
+  id                BigInt   @id @default(autoincrement())
+  userId            String
+  meetingId         String
+  meetingUuid       String?
+  participantName   String?
+  participantEmail  String?
+  participantZoomId String?
+  matchReason       String
+  // action: "detected" | "removed" | "remove_failed" | "dry_run"
+  action            String
+  latencyMs         Int?
+  // source: "webhook" (passive detection) | "sidebar" (in-client active removal)
+  source            String
+  errorMessage      String?
+  createdAt         DateTime @default(now())
+
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("audit_log")
+}
