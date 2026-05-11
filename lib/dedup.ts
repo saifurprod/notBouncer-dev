@@ -32,6 +32,15 @@ export type BotIncident = {
   action: "removed" | "moved_to_waiting_room" | "remove_failed" | "detected" | "dry_run";
   latencyMs: number | null;
   errorMessage: string | null;
+  // Counts of each action type observed for this incident. Used to surface
+  // "this bot has been bouncing in and out" patterns (e.g. sent to waiting
+  // room 5 times) without inflating the incident count itself.
+  cycles: {
+    detected: number;
+    waiting: number;
+    removed: number;
+    failed: number;
+  };
 };
 
 // Higher number = "more advanced" action. When grouping we pick the highest.
@@ -44,70 +53,185 @@ const ACTION_RANK: Record<string, number> = {
 };
 
 /**
- * Builds a stable grouping key for a row.
- * Prefer participantZoomId (most stable) but fall back to a normalized name
- * + meeting so webhook events without zoomId still dedup against sidebar.
+ * Normalize a name for matching: lowercase, trim, collapse spaces,
+ * strip "(reconnected)" / "(2)" suffixes.
  */
-function groupKey(row: RawAuditRow): string {
-  const id =
-    row.participantZoomId ||
-    (row.participantName ? row.participantName.toLowerCase().trim() : "unknown");
-  return `${row.meetingId}::${id}`;
+function normalizeName(name: string | null | undefined): string {
+  if (!name) return "";
+  return name
+    .toLowerCase()
+    .trim()
+    .replace(/\s*\([^)]*\)\s*$/g, "")
+    .replace(/\s+/g, " ");
 }
 
 /**
  * Reduce raw audit rows to one BotIncident per (meeting, bot).
+ *
+ * The webhook and the sidebar SDK use different identifiers for the same
+ * participant — webhooks give a Zoom participant ID (numeric), the SDK
+ * gives a participantUUID (base64). So we can't just key on the ID column.
+ *
+ * Strategy: build a union-find over rows. Two rows merge if, in the same
+ * meeting, they share ANY of: participantZoomId, normalized name, or email.
+ * This catches webhook+sidebar pairs even when their IDs disagree.
+ *
  * Input may be in any order; output is sorted newest-first by earliestAt.
  */
 export function dedupIncidents(rows: RawAuditRow[]): BotIncident[] {
-  const map = new Map<string, BotIncident>();
+  if (rows.length === 0) return [];
 
-  for (const row of rows) {
-    const key = groupKey(row);
-    const existing = map.get(key);
+  // Index rows by their position so union-find works on indices
+  const n = rows.length;
+  const parent = Array.from({ length: n }, (_, i) => i);
 
-    if (!existing) {
-      map.set(key, {
-        id: key,
-        earliestAt: row.createdAt,
-        meetingId: row.meetingId,
-        participantName: row.participantName,
-        participantEmail: row.participantEmail,
-        participantZoomId: row.participantZoomId,
-        matchReason: row.matchReason,
-        action: (row.action as BotIncident["action"]) ?? "detected",
-        latencyMs: row.latencyMs,
-        errorMessage: row.errorMessage,
-      });
-      continue;
+  function find(i: number): number {
+    while (parent[i] !== i) {
+      parent[i] = parent[parent[i]]; // path compression
+      i = parent[i];
     }
-
-    // Earliest timestamp wins
-    if (row.createdAt < existing.earliestAt) {
-      existing.earliestAt = row.createdAt;
-    }
-
-    // Fill in details from any row that has them
-    existing.participantEmail ||= row.participantEmail;
-    existing.participantZoomId ||= row.participantZoomId;
-
-    const incomingRank = ACTION_RANK[row.action] ?? 0;
-    const existingRank = ACTION_RANK[existing.action] ?? 0;
-
-    if (incomingRank > existingRank) {
-      // Promote to higher action; carry latency / error from the winning row
-      existing.action = row.action as BotIncident["action"];
-      existing.latencyMs = row.latencyMs ?? existing.latencyMs;
-      existing.errorMessage = row.errorMessage ?? existing.errorMessage;
-    } else if (incomingRank === existingRank) {
-      // Same action — prefer non-null details
-      existing.latencyMs = existing.latencyMs ?? row.latencyMs;
-      existing.errorMessage = existing.errorMessage ?? row.errorMessage;
-    }
-    // (incomingRank < existingRank: keep existing as the representative)
+    return i;
   }
 
-  return Array.from(map.values()).sort(
+  function union(a: number, b: number) {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent[rb] = ra;
+  }
+
+  // Index rows within each meeting by id / name / email for fast matching.
+  // For name matching we keep a LIST of (timestamp, index) pairs because
+  // we only want to merge by name when entries are close together in time.
+  const byMeetingId = new Map<string, Map<string, number>>();
+  const byMeetingName = new Map<
+    string,
+    Map<string, Array<{ idx: number; ts: number }>>
+  >();
+  const byMeetingEmail = new Map<string, Map<string, number>>();
+
+  // 30-second window for name-based dedup. Webhook + sidebar pairs always
+  // arrive within a few seconds. Beyond 30s, same-name rows are treated as
+  // separate incidents (e.g. a bot that rejoined after being kicked).
+  const NAME_MATCH_WINDOW_MS = 30_000;
+
+  for (let i = 0; i < n; i++) {
+    const row = rows[i];
+    const meeting = row.meetingId;
+
+    // ID match — exact, no time window
+    if (row.participantZoomId) {
+      const m = byMeetingId.get(meeting) ?? new Map();
+      const seen = m.get(row.participantZoomId);
+      if (seen !== undefined) union(seen, i);
+      else m.set(row.participantZoomId, i);
+      byMeetingId.set(meeting, m);
+    }
+
+    // Name match — only union if within the time window of an existing row.
+    // This prevents merging "Otter kicked at 2:00" with "Otter rejoined at 2:08"
+    // while still merging webhook+sidebar pairs that arrive seconds apart.
+    const norm = normalizeName(row.participantName);
+    if (norm) {
+      const m = byMeetingName.get(meeting) ?? new Map();
+      const seen = m.get(norm) ?? [];
+      const ts = row.createdAt.getTime();
+      for (const entry of seen) {
+        if (Math.abs(entry.ts - ts) <= NAME_MATCH_WINDOW_MS) {
+          union(entry.idx, i);
+          break;
+        }
+      }
+      seen.push({ idx: i, ts });
+      m.set(norm, seen);
+      byMeetingName.set(meeting, m);
+    }
+
+    // Email match — exact, no time window (emails are stable identifiers)
+    if (row.participantEmail) {
+      const email = row.participantEmail.toLowerCase();
+      const m = byMeetingEmail.get(meeting) ?? new Map();
+      const seen = m.get(email);
+      if (seen !== undefined) union(seen, i);
+      else m.set(email, i);
+      byMeetingEmail.set(meeting, m);
+    }
+  }
+
+  // Collect rows per group representative
+  const groups = new Map<number, number[]>();
+  for (let i = 0; i < n; i++) {
+    const root = find(i);
+    const list = groups.get(root);
+    if (list) list.push(i);
+    else groups.set(root, [i]);
+  }
+
+  // Reduce each group to a single BotIncident
+  const incidents: BotIncident[] = [];
+  for (const [, indices] of groups) {
+    // Use the EARLIEST row's identifiers as the canonical representation,
+    // then promote to higher action / fill in nulls from other rows.
+    const groupRows = indices
+      .map((i) => rows[i])
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+
+    const first = groupRows[0];
+    const incident: BotIncident = {
+      id: `${first.meetingId}::${first.participantZoomId ?? normalizeName(first.participantName) ?? String(first.id)}`,
+      earliestAt: first.createdAt,
+      meetingId: first.meetingId,
+      participantName: first.participantName,
+      participantEmail: first.participantEmail,
+      participantZoomId: first.participantZoomId,
+      matchReason: first.matchReason,
+      action: (first.action as BotIncident["action"]) ?? "detected",
+      latencyMs: first.latencyMs,
+      errorMessage: first.errorMessage,
+      cycles: { detected: 0, waiting: 0, removed: 0, failed: 0 },
+    };
+
+    // Count action occurrences across ALL rows in the group (including the first).
+    // This is the "cycles" data — independent of action-rank promotion above.
+    for (const row of groupRows) {
+      switch (row.action) {
+        case "detected":
+          incident.cycles.detected++;
+          break;
+        case "moved_to_waiting_room":
+          incident.cycles.waiting++;
+          break;
+        case "removed":
+          incident.cycles.removed++;
+          break;
+        case "remove_failed":
+          incident.cycles.failed++;
+          break;
+      }
+    }
+
+    for (let k = 1; k < groupRows.length; k++) {
+      const row = groupRows[k];
+      // Fill in details from any row that has them
+      incident.participantEmail ||= row.participantEmail;
+      incident.participantZoomId ||= row.participantZoomId;
+      incident.participantName ||= row.participantName;
+
+      const incomingRank = ACTION_RANK[row.action] ?? 0;
+      const existingRank = ACTION_RANK[incident.action] ?? 0;
+      if (incomingRank > existingRank) {
+        incident.action = row.action as BotIncident["action"];
+        incident.latencyMs = row.latencyMs ?? incident.latencyMs;
+        incident.errorMessage = row.errorMessage ?? incident.errorMessage;
+      } else if (incomingRank === existingRank) {
+        incident.latencyMs = incident.latencyMs ?? row.latencyMs;
+        incident.errorMessage = incident.errorMessage ?? row.errorMessage;
+      }
+    }
+
+    incidents.push(incident);
+  }
+
+  return incidents.sort(
     (a, b) => b.earliestAt.getTime() - a.earliestAt.getTime()
   );
 }

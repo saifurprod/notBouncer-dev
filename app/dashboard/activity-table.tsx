@@ -5,6 +5,13 @@ import { Icon } from "@/lib/ui/icons";
 import { StatusPill, TONE_FOR_ACTION } from "@/lib/ui/components";
 import { COPY, humanizeError, humanizeErrorShort } from "@/lib/copy";
 
+export type IncidentCycles = {
+  detected: number;
+  waiting: number;
+  removed: number;
+  failed: number;
+};
+
 export type ActivityRow = {
   id: string;
   meetingId: string;
@@ -15,6 +22,7 @@ export type ActivityRow = {
   action: string;
   latency: number | null;
   error: string | null;
+  cycles: IncidentCycles;
 };
 
 export type MeetingForClient = {
@@ -35,8 +43,28 @@ export type MeetingForClient = {
     reason: string;
     action: string;
     latency: number | null;
+    cycles: IncidentCycles;
   }>;
 };
+
+/**
+ * Format a cycles object into a compact annotation string.
+ * Shows only counters that hit 2+ occurrences, joined by middle dots.
+ * Returns null if nothing crosses the threshold (i.e. no annotation needed).
+ *
+ * Examples:
+ *   { waiting: 7, removed: 0, failed: 0, detected: 8 } → "waiting × 7"
+ *   { waiting: 3, removed: 2, failed: 0 }              → "waiting × 3 · removed × 2"
+ *   { waiting: 1, removed: 0, failed: 0 }              → null (nothing ≥ 2)
+ */
+function formatCycles(cycles: IncidentCycles): string | null {
+  const parts: string[] = [];
+  if (cycles.waiting >= 2) parts.push(`waiting × ${cycles.waiting}`);
+  if (cycles.removed >= 2) parts.push(`removed × ${cycles.removed}`);
+  if (cycles.failed >= 2) parts.push(`failed × ${cycles.failed}`);
+  if (parts.length === 0) return null;
+  return parts.join(" · ");
+}
 
 // Smart timestamp formatter — local timezone, relative wording.
 function formatTimestamp(iso: string, now: Date): string {
@@ -490,6 +518,23 @@ function EventTable({
               </div>
               <div>
                 <StatusPill tone={a.tone}>{a.label}</StatusPill>
+                {(() => {
+                  const cyclesText = formatCycles(log.cycles);
+                  return cyclesText ? (
+                    <div
+                      className="font-mono"
+                      style={{
+                        fontSize: 11,
+                        color: "var(--ink-500)",
+                        marginTop: 4,
+                        lineHeight: 1.4,
+                      }}
+                      title="Action cycles for this incident"
+                    >
+                      {cyclesText}
+                    </div>
+                  ) : null;
+                })()}
                 {log.error && (
                   <div
                     style={{
@@ -553,9 +598,23 @@ function EventTable({
                 style={{ fontSize: 11, color: "var(--ink-500)" }}
               >
                 <span>{whenText}</span>
-                {log.latency && (
-                  <span className="font-mono">{log.latency}ms</span>
-                )}
+                <span className="flex items-center gap-2">
+                  {(() => {
+                    const cyclesText = formatCycles(log.cycles);
+                    return cyclesText ? (
+                      <span
+                        className="font-mono"
+                        style={{ color: "var(--ink-600)" }}
+                        title="Action cycles for this incident"
+                      >
+                        {cyclesText}
+                      </span>
+                    ) : null;
+                  })()}
+                  {log.latency && (
+                    <span className="font-mono">{log.latency}ms</span>
+                  )}
+                </span>
               </div>
               {log.error && (
                 <div
@@ -681,7 +740,21 @@ function MeetingList({
                         {inc.reason}
                       </div>
                     </div>
-                    <StatusPill tone={a.tone}>{a.label}</StatusPill>
+                    <div className="flex flex-col items-end gap-1 shrink-0">
+                      <StatusPill tone={a.tone}>{a.label}</StatusPill>
+                      {(() => {
+                        const cyclesText = formatCycles(inc.cycles);
+                        return cyclesText ? (
+                          <span
+                            className="font-mono"
+                            style={{ fontSize: 10, color: "var(--ink-500)" }}
+                            title="Action cycles for this incident"
+                          >
+                            {cyclesText}
+                          </span>
+                        ) : null;
+                      })()}
+                    </div>
                   </div>
                 );
               })}

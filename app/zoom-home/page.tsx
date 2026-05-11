@@ -31,9 +31,12 @@ type DetectedBot = {
   errorMessage?: string;
 };
 
+// Error-only toast. Success and info toasts were removed — the bot card
+// colour state inside "Caught bots" is the visible feedback for happy-path
+// actions, and the Zoom system notification handles new-bot alerts. We only
+// surface a toast when something actually fails and the host needs to know.
 type Toast = {
   id: number;
-  tone: "success" | "info" | "error";
   text: string;
   expiresAt: number;
 };
@@ -93,10 +96,10 @@ export default function ZoomHomePage() {
     setLogs((prev) => [{ ts: Date.now(), level, text }, ...prev].slice(0, 100));
   }
 
-  function showToast(tone: Toast["tone"], text: string, durationMs = 3500) {
+  function showToast(text: string, durationMs = 3500) {
     const id = ++toastIdRef.current;
     const expiresAt = Date.now() + durationMs;
-    setToasts((prev) => [...prev, { id, tone, text, expiresAt }]);
+    setToasts((prev) => [...prev, { id, text, expiresAt }]);
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, durationMs);
@@ -201,7 +204,6 @@ export default function ZoomHomePage() {
       await sdk.removeParticipant({ participantUUID: uuid });
       const latencyMs = Date.now() - startedAt;
       appendLog("success", `Auto-removed: ${name} (${latencyMs}ms)`);
-      showToast("success", `${name} tried to rejoin — kicked again`);
       await syncEvent({
         participantName: name,
         participantEmail: email ?? undefined,
@@ -280,7 +282,7 @@ export default function ZoomHomePage() {
     const sdk = sdkRef.current;
     if (!sdk) {
       appendLog("error", "SDK not available");
-      showToast("error", "Zoom SDK not ready");
+      showToast("Zoom SDK not ready");
       return;
     }
     if (bot.status !== "pending" && bot.status !== "failed") return;
@@ -299,7 +301,6 @@ export default function ZoomHomePage() {
         await sdk.removeParticipant({ participantUUID: bot.participantUUID });
         const latencyMs = Date.now() - startedAt;
         appendLog("success", `Removed: ${bot.name} (${latencyMs}ms)`);
-        showToast("success", COPY.sidebarToastRemoved(bot.name));
         addToBlocklist(bot.name, bot.email);
         setDetectedBots((prev) =>
           prev.map((b) =>
@@ -322,7 +323,6 @@ export default function ZoomHomePage() {
         });
         const latencyMs = Date.now() - startedAt;
         appendLog("success", `Sent to waiting room: ${bot.name} (${latencyMs}ms)`);
-        showToast("success", COPY.sidebarToastWaiting(bot.name));
         // Deliberately not blocklisting on waiting-room — admit-back is reversible.
         setDetectedBots((prev) =>
           prev.map((b) =>
@@ -344,7 +344,7 @@ export default function ZoomHomePage() {
       const msg = err?.message ?? String(err);
       const human = humanizeErrorShort(msg);
       appendLog("error", `Action failed for ${bot.name}: ${human}`);
-      showToast("error", `${COPY.sidebarToastFailed(bot.name)}: ${human}`);
+      showToast(`${COPY.sidebarToastFailed(bot.name)}: ${human}`);
       setDetectedBots((prev) =>
         prev.map((b) =>
           b.participantUUID === bot.participantUUID
@@ -370,7 +370,7 @@ export default function ZoomHomePage() {
     if (pending.length === 0) return;
     if (actionMode === "waiting_room" && waitingRoomEnabled === false) {
       appendLog("error", COPY.sidebarWaitingRoomOff);
-      showToast("error", "Waiting room is off — turn it on first");
+      showToast("Waiting room is off — turn it on first");
       return;
     }
     setBulkRunning(true);
@@ -578,10 +578,13 @@ export default function ZoomHomePage() {
       className="min-h-screen flex justify-center items-start font-sans"
       style={{ background: "var(--canvas-lavender)", padding: 16 }}
     >
-      {/* Toast container — fixed top of viewport */}
+      {/* Error toast container — fixed bottom-right. Errors only; success
+          actions are reflected via bot card status changes inside the
+          Caught bots section, and the Zoom system notification handles
+          new-bot alerts. */}
       <div
-        className="fixed left-1/2 -translate-x-1/2 z-50 flex flex-col gap-2 pointer-events-none"
-        style={{ top: 12, maxWidth: 320, width: "calc(100% - 24px)" }}
+        className="fixed z-50 flex flex-col gap-2 pointer-events-none"
+        style={{ bottom: 16, right: 16, maxWidth: 320 }}
       >
         {toasts.map((t) => (
           <ToastItem key={t.id} toast={t} />
@@ -1142,46 +1145,30 @@ function BotCard({
 }
 
 function ToastItem({ toast }: { toast: Toast }) {
-  const palette = {
-    success: {
-      bg: "var(--emerald-50)",
-      border: "var(--emerald-100)",
-      fg: "var(--emerald-600)",
-      icon: "check" as const,
-    },
-    info: {
-      bg: "var(--indigo-50)",
-      border: "var(--indigo-100)",
-      fg: "var(--indigo-600)",
-      icon: "dot" as const,
-    },
-    error: {
-      bg: "var(--rose-100)",
-      border: "#fecdd3",
-      fg: "#9F1239",
-      icon: "x" as const,
-    },
-  }[toast.tone];
+  // Rose / error styling only — non-error toasts have been removed.
+  const ROSE_BG = "var(--rose-100)";
+  const ROSE_BORDER = "#fecdd3";
+  const ROSE_FG = "#9F1239";
 
   return (
     <div
       className="rounded-xl flex items-center gap-2 pointer-events-auto animate-toast-in"
       style={{
-        background: palette.bg,
-        border: `1px solid ${palette.border}`,
+        background: ROSE_BG,
+        border: `1px solid ${ROSE_BORDER}`,
         boxShadow: "var(--shadow-float)",
         padding: "10px 14px",
-        color: palette.fg,
+        color: ROSE_FG,
         fontSize: 13,
         fontWeight: 500,
         lineHeight: 1.4,
       }}
     >
-      <Icon name={palette.icon} size={14} color={palette.fg} />
+      <Icon name="x" size={14} color={ROSE_FG} />
       <span className="flex-1">{toast.text}</span>
       <style>{`
         @keyframes toast-in {
-          from { opacity: 0; transform: translateY(-8px); }
+          from { opacity: 0; transform: translateY(8px); }
           to { opacity: 1; transform: translateY(0); }
         }
         .animate-toast-in { animation: toast-in 200ms cubic-bezier(0.16, 1, 0.3, 1); }

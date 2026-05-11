@@ -99,6 +99,7 @@ export default async function DashboardPage({
     action: i.action,
     latency: i.latencyMs,
     error: i.errorMessage,
+    cycles: i.cycles,
   }));
 
   // Serializable meeting summary for the client component
@@ -114,6 +115,7 @@ export default async function DashboardPage({
       reason: i.matchReason,
       action: i.action,
       latency: i.latencyMs,
+      cycles: i.cycles,
     })),
   }));
 
