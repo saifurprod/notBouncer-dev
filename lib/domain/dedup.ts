@@ -237,16 +237,36 @@ export function dedupIncidents(rows: RawAuditRow[]): BotIncident[] {
 }
 
 /**
- * Count incidents by action category. Used for dashboard stat tiles.
- * `detected` here is the count of incidents that were caught but never
- * acted on (i.e. final state is still "detected").
+ * Count actions across incidents. Returns the raw count of audit log
+ * rows for each action type (by summing each incident's cycle counts).
+ *
+ * This is the "how many times did the host do each thing" view, which
+ * is the right semantics for dashboard tiles. A bot that was sent to
+ * waiting room twice and then removed contributes: waiting=2, removed=1.
+ *
+ * `total` here is the number of incidents (unique bot+meeting pairs),
+ * not the sum of cycles. `detected` is also incident-count, since every
+ * incident was detected at least once and treating it as "all detection
+ * audit rows" would inflate the number with re-detection noise that the
+ * other tiles don't have.
  */
 export function countByAction(incidents: BotIncident[]) {
+  let removed = 0;
+  let waiting = 0;
+  let failed = 0;
+  for (const inc of incidents) {
+    removed += inc.cycles.removed;
+    waiting += inc.cycles.waiting;
+    failed += inc.cycles.failed;
+  }
   return {
     total: incidents.length,
-    removed: incidents.filter((i) => i.action === "removed").length,
-    waiting: incidents.filter((i) => i.action === "moved_to_waiting_room").length,
-    failed: incidents.filter((i) => i.action === "remove_failed").length,
+    detected: incidents.length,
+    removed,
+    waiting,
+    failed,
+    // Kept for backward-compat with anything reading `detectedOnly`
+    // (it now means "incidents whose final state is still 'detected'").
     detectedOnly: incidents.filter((i) => i.action === "detected").length,
   };
 }
@@ -262,6 +282,7 @@ export type MeetingSummary = {
   incidents: BotIncident[];
   counts: {
     total: number;
+    detected: number;
     removed: number;
     waiting: number;
     failed: number;

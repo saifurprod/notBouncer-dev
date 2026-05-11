@@ -316,8 +316,8 @@ function StatsCard({
   total,
   week,
 }: {
-  total: { total: number; removed: number; waiting: number; failed: number; detectedOnly: number };
-  week: { total: number; removed: number; waiting: number; failed: number; detectedOnly: number };
+  total: { total: number; detected: number; removed: number; waiting: number; failed: number; detectedOnly: number };
+  week: { total: number; detected: number; removed: number; waiting: number; failed: number; detectedOnly: number };
 }) {
   const stats = [
     {
