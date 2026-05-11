@@ -60,6 +60,11 @@ export default function ZoomHomePage() {
     domains: new Set(),
   });
   const toastIdRef = useRef(0);
+  // Queue of bot names detected mid-meeting, waiting to be coalesced into
+  // a single Zoom system notification. Pattern: every new bot resets a
+  // 2-second timer; when the timer fires, we send one summary notification.
+  const pendingBotNamesRef = useRef<string[]>([]);
+  const notifyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   function normalizeName(name: string): string {
     return name
@@ -95,6 +100,61 @@ export default function ZoomHomePage() {
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, durationMs);
+  }
+
+  /**
+   * Queue a bot detection for Zoom's system notification.
+   *
+   * Pattern A debounce: every new bot resets a 2-second timer. When the
+   * timer fires, all queued bot names are coalesced into a single Zoom
+   * `showNotification` so a flood of joins (e.g., 3 notetakers at once)
+   * produces ONE notification, not three.
+   *
+   * Truncation: at most 3 names appear; any beyond that are summarised
+   * as "+ N more" to stay within the small notification space.
+   */
+  function queueBotNotification(name: string) {
+    pendingBotNamesRef.current.push(name);
+
+    if (notifyTimerRef.current) clearTimeout(notifyTimerRef.current);
+    notifyTimerRef.current = setTimeout(() => {
+      const names = pendingBotNamesRef.current;
+      pendingBotNamesRef.current = [];
+      notifyTimerRef.current = null;
+
+      if (names.length === 0) return;
+      const sdk = sdkRef.current;
+      if (!sdk) return;
+
+      let title: string;
+      let message: string;
+      if (names.length === 1) {
+        title = "Bot detected";
+        message = `${names[0]} joined your meeting`;
+      } else {
+        const shown = names.slice(0, 3);
+        const remaining = names.length - shown.length;
+        const namesText =
+          remaining > 0
+            ? `${shown.join(", ")} + ${remaining} more`
+            : shown.slice(0, -1).join(", ") + " and " + shown[shown.length - 1];
+        title = `${names.length} bots detected`;
+        message = `${namesText} joined your meeting`;
+      }
+
+      try {
+        sdk
+          .showNotification({ type: "warning", title, message })
+          .catch((err: any) => {
+            appendLog(
+              "warn",
+              `Notification failed: ${err?.message ?? String(err)}`
+            );
+          });
+      } catch (err: any) {
+        appendLog("warn", `Notification threw: ${err?.message ?? String(err)}`);
+      }
+    }, 2000);
   }
 
   async function syncEvent(payload: {
@@ -164,7 +224,7 @@ export default function ZoomHomePage() {
     }
   }
 
-  async function detectParticipant(p: any) {
+  async function detectParticipant(p: any, isNewJoin = false) {
     const name = p.screenName ?? p.userName ?? p.displayName ?? "";
     const email = p.email ?? null;
     const uuid = p.participantUUID ?? p.userId;
@@ -185,6 +245,15 @@ export default function ZoomHomePage() {
 
     detectedUUIDsRef.current.add(uuid);
     appendLog("warn", `Bot detected: ${name} (${result.reason})`);
+
+    // Only fire a Zoom system notification for bots that join mid-meeting
+    // while the host is already in the meeting. Bots discovered during the
+    // sidebar's initial participant enumeration (i.e. they were already in
+    // the meeting when the sidebar opened) are surfaced via the sidebar UI
+    // instead — no system notification needed.
+    if (isNewJoin) {
+      queueBotNotification(name);
+    }
 
     setDetectedBots((prev) => [
       ...prev,
@@ -388,6 +457,7 @@ export default function ZoomHomePage() {
             "putParticipantToWaitingRoom",
             "getWaitingRoomState",
             "onParticipantChange",
+            "showNotification",
           ],
         });
         if (cancelled) return;
@@ -456,7 +526,7 @@ export default function ZoomHomePage() {
               });
             }
             if (action === "join" || action === "joined") {
-              await detectParticipant(p);
+              await detectParticipant(p, true);
             }
           }
         });
@@ -478,6 +548,10 @@ export default function ZoomHomePage() {
 
     return () => {
       cancelled = true;
+      if (notifyTimerRef.current) {
+        clearTimeout(notifyTimerRef.current);
+        notifyTimerRef.current = null;
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
