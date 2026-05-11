@@ -8,6 +8,7 @@ import {
 } from "@/lib/ui/components";
 import { ActivityTable, ActivityRow } from "./activity-table";
 import { generateInsight } from "@/lib/insights";
+import { dedupIncidents, countByAction } from "@/lib/dedup";
 
 export const dynamic = "force-dynamic";
 
@@ -16,75 +17,49 @@ export default async function DashboardPage({
 }: {
   searchParams: { installed?: string };
 }) {
-  // Pull everything we need in parallel
-  const [users, recentLogs, allLogsForInsight, monthCount, last48hCount] =
-    await Promise.all([
-      prisma.user.findMany({
-        where: { deauthorizedAt: null },
-        orderBy: { installedAt: "desc" },
-      }),
-      prisma.auditLog.findMany({
-        orderBy: { createdAt: "desc" },
-        take: 100,
-      }),
-      prisma.auditLog.findMany({
-        orderBy: { createdAt: "desc" },
-        take: 500,
-      }),
-      prisma.auditLog.count({
-        where: {
-          createdAt: {
-            gte: new Date(
-              new Date().getFullYear(),
-              new Date().getMonth(),
-              1
-            ),
-          },
-          action: { in: ["detected", "removed", "moved_to_waiting_room"] },
-        },
-      }),
-      prisma.auditLog.count({
-        where: {
-          createdAt: { gte: new Date(Date.now() - 48 * 60 * 60 * 1000) },
-        },
-      }),
-    ]);
+  // Pull a wide window of raw audit rows so the dedup can group correctly.
+  // We then derive stats and the activity list from the deduped incidents.
+  const [users, allLogs, last48hLogs] = await Promise.all([
+    prisma.user.findMany({
+      where: { deauthorizedAt: null },
+      orderBy: { installedAt: "desc" },
+    }),
+    prisma.auditLog.findMany({
+      orderBy: { createdAt: "desc" },
+      take: 1000, // wide window for dedup + insights
+    }),
+    prisma.auditLog.findMany({
+      where: { createdAt: { gte: new Date(Date.now() - 48 * 60 * 60 * 1000) } },
+    }),
+  ]);
 
-  // Stats — counted over the last 7 days for the "this week" deltas
+  // Dedup all rows into one incident per (meeting, bot)
+  const allIncidents = dedupIncidents(allLogs);
+
+  // Stats — totals are over all incidents we have; "this week" is over the last 7 days
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-  const last7Days = await prisma.auditLog.findMany({
-    where: { createdAt: { gte: sevenDaysAgo } },
-    select: { action: true },
-  });
+  const weekIncidents = allIncidents.filter(
+    (i) => i.earliestAt >= sevenDaysAgo
+  );
+  const monthStart = new Date(
+    new Date().getFullYear(),
+    new Date().getMonth(),
+    1
+  );
+  const monthIncidents = allIncidents.filter(
+    (i) => i.earliestAt >= monthStart
+  );
 
-  const total = {
-    detected: allLogsForInsight.filter((l) => l.action === "detected").length +
-      allLogsForInsight.filter(
-        (l) => l.action === "removed" || l.action === "moved_to_waiting_room"
-      ).length,
-    removed: allLogsForInsight.filter((l) => l.action === "removed").length,
-    waiting: allLogsForInsight.filter(
-      (l) => l.action === "moved_to_waiting_room"
-    ).length,
-    failed: allLogsForInsight.filter((l) => l.action === "remove_failed")
-      .length,
-  };
-  const week = {
-    detected: last7Days.filter(
-      (l) =>
-        l.action === "detected" ||
-        l.action === "removed" ||
-        l.action === "moved_to_waiting_room"
-    ).length,
-    removed: last7Days.filter((l) => l.action === "removed").length,
-    waiting: last7Days.filter((l) => l.action === "moved_to_waiting_room")
-      .length,
-    failed: last7Days.filter((l) => l.action === "remove_failed").length,
-  };
+  const total = countByAction(allIncidents);
+  const week = countByAction(weekIncidents);
 
-  // AI insight — currently rule-based via generateInsight()
+  // Last-48h is a separate count (raw rows are fine here since it's just
+  // "did anything happen at all in the last 2 days")
+  const last48hCount = last48hLogs.length;
+
+  // AI insight runs on raw rows so its vendor counting works
   const insight = generateInsight(
-    allLogsForInsight.map((l) => ({
+    allLogs.map((l) => ({
       participantName: l.participantName,
       matchReason: l.matchReason,
       action: l.action,
@@ -95,31 +70,26 @@ export default async function DashboardPage({
     }))
   );
 
-  // For the hero: stat sentence
-  const heroStat = `${monthCount} bot${monthCount === 1 ? "" : "s"} stopped this month.`;
+  const heroStat = `${monthIncidents.length} bot${monthIncidents.length === 1 ? "" : "s"} stopped this month.`;
   const heroSub =
     last48hCount === 0
       ? "No notetaker has crashed your meetings unannounced in the last 48 hours."
-      : `${last48hCount} bot event${last48hCount === 1 ? "" : "s"} in the last 48 hours.`;
+      : `${monthIncidents.length} bot incident${monthIncidents.length === 1 ? "" : "s"} caught this month across your meetings.`;
 
   const primaryHost = users[0];
   const hostFirstName = primaryHost?.displayName?.split(" ")[0] ?? "Host";
 
-  // Convert audit logs to activity rows
-  const rows: ActivityRow[] = recentLogs.map((l) => ({
-    id: String(l.id),
-    when: l.createdAt.toISOString(),
-    whenFormatted: l.createdAt
-      .toISOString()
-      .slice(0, 19)
-      .replace("T", " "),
-    name: l.participantName,
-    email: l.participantEmail,
-    reason: l.matchReason,
-    action: l.action,
-    source: l.source,
-    latency: l.latencyMs,
-    error: l.errorMessage,
+  // Convert deduped incidents to activity rows for the client component.
+  // Keep raw ISO timestamp; client component formats it in the user's tz.
+  const rows: ActivityRow[] = allIncidents.slice(0, 100).map((i) => ({
+    id: i.id,
+    whenISO: i.earliestAt.toISOString(),
+    name: i.participantName,
+    email: i.participantEmail,
+    reason: i.matchReason,
+    action: i.action,
+    latency: i.latencyMs,
+    error: i.errorMessage,
   }));
 
   return (
@@ -317,15 +287,15 @@ function StatsCard({
   total,
   week,
 }: {
-  total: { detected: number; removed: number; waiting: number; failed: number };
-  week: { detected: number; removed: number; waiting: number; failed: number };
+  total: { total: number; removed: number; waiting: number; failed: number; detectedOnly: number };
+  week: { total: number; removed: number; waiting: number; failed: number; detectedOnly: number };
 }) {
   const stats = [
     {
       label: "Detected",
       tone: "slate" as const,
-      value: total.detected,
-      delta: `${signed(week.detected)} this week`,
+      value: total.total,
+      delta: `${signed(week.total)} this week`,
       icon: "bot" as const,
     },
     {

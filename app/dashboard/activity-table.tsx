@@ -1,34 +1,87 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { Icon } from "@/lib/ui/icons";
 import { StatusPill, TONE_FOR_ACTION } from "@/lib/ui/components";
 
 export type ActivityRow = {
   id: string;
-  when: string; // ISO string
-  whenFormatted: string; // pre-formatted for display
+  whenISO: string;
   name: string | null;
   email: string | null;
   reason: string;
   action: string;
-  source: string;
   latency: number | null;
   error: string | null;
 };
 
+/**
+ * Format a timestamp in the user's local timezone with smart relative wording.
+ * Rules:
+ *  - < 60 seconds → "just now"
+ *  - < 60 minutes → "Nm ago"
+ *  - < 24 hours and same calendar day → "Today, HH:MM AM/PM"
+ *  - yesterday → "Yesterday, HH:MM AM/PM"
+ *  - same year → "MMM D, HH:MM AM/PM"
+ *  - older → "MMM D YYYY"
+ */
+function formatTimestamp(iso: string, now: Date): string {
+  const d = new Date(iso);
+  const diffMs = now.getTime() - d.getTime();
+  const diffMin = Math.floor(diffMs / 60_000);
+  const diffHr = Math.floor(diffMs / 3_600_000);
+
+  if (diffMs < 0) {
+    // Future timestamp — just show absolute time
+    return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  }
+  if (diffMin < 1) return "just now";
+  if (diffMin < 60) return `${diffMin}m ago`;
+
+  const sameDay = d.toDateString() === now.toDateString();
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  const isYesterday = d.toDateString() === yesterday.toDateString();
+  const time = d.toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+
+  if (sameDay) return `Today, ${time}`;
+  if (isYesterday) return `Yesterday, ${time}`;
+
+  if (d.getFullYear() === now.getFullYear()) {
+    return `${d.toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+    })}, ${time}`;
+  }
+
+  return d.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
 export function ActivityTable({ rows }: { rows: ActivityRow[] }) {
   const [filterOpen, setFilterOpen] = useState(false);
   const [actionFilter, setActionFilter] = useState<string>("all");
-  const [sourceFilter, setSourceFilter] = useState<string>("all");
+
+  // Re-render every minute so relative timestamps stay fresh
+  const [now, setNow] = useState<Date | null>(null);
+  useEffect(() => {
+    setNow(new Date());
+    const id = setInterval(() => setNow(new Date()), 60_000);
+    return () => clearInterval(id);
+  }, []);
 
   const filtered = useMemo(() => {
     return rows.filter((r) => {
       if (actionFilter !== "all" && r.action !== actionFilter) return false;
-      if (sourceFilter !== "all" && r.source !== sourceFilter) return false;
       return true;
     });
-  }, [rows, actionFilter, sourceFilter]);
+  }, [rows, actionFilter]);
 
   function exportCsv() {
     const header = [
@@ -37,7 +90,6 @@ export function ActivityTable({ rows }: { rows: ActivityRow[] }) {
       "email",
       "reason",
       "action",
-      "source",
       "latency_ms",
       "error",
     ];
@@ -50,12 +102,11 @@ export function ActivityTable({ rows }: { rows: ActivityRow[] }) {
       header.join(","),
       ...filtered.map((r) =>
         [
-          r.when,
+          r.whenISO,
           r.name ?? "",
           r.email ?? "",
           r.reason,
           r.action,
-          r.source,
           r.latency ?? "",
           r.error ?? "",
         ]
@@ -73,7 +124,7 @@ export function ActivityTable({ rows }: { rows: ActivityRow[] }) {
     URL.revokeObjectURL(url);
   }
 
-  const hasFilters = actionFilter !== "all" || sourceFilter !== "all";
+  const hasFilters = actionFilter !== "all";
 
   return (
     <div className="glass-card p-7">
@@ -89,7 +140,7 @@ export function ActivityTable({ rows }: { rows: ActivityRow[] }) {
             className="mt-1"
             style={{ fontSize: 13, color: "var(--ink-600)" }}
           >
-            Every detection and removal across your hosts, newest first
+            Every bot caught in your meetings, newest first
           </div>
         </div>
         <div className="flex gap-2 relative">
@@ -189,48 +240,19 @@ export function ActivityTable({ rows }: { rows: ActivityRow[] }) {
                   )}
                 </div>
               </div>
-              <div className="mb-3">
-                <div
-                  className="mb-2 uppercase tracking-[0.06em]"
-                  style={{
-                    fontSize: 10,
-                    fontWeight: 500,
-                    color: "var(--ink-500)",
-                  }}
-                >
-                  Source
-                </div>
-                <div className="flex gap-1">
-                  {["all", "webhook", "sidebar"].map((s) => (
-                    <button
-                      key={s}
-                      onClick={() => setSourceFilter(s)}
-                      className="rounded-full"
-                      style={{
-                        fontSize: 11,
-                        padding: "4px 10px",
-                        background:
-                          sourceFilter === s
-                            ? "var(--sage-plum)"
-                            : "var(--gray-100)",
-                        color: sourceFilter === s ? "#fff" : "var(--ink-700)",
-                        border: "none",
-                        cursor: "pointer",
-                      }}
-                    >
-                      {s.charAt(0).toUpperCase() + s.slice(1)}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="flex justify-between items-center pt-2 border-t" style={{ borderColor: "var(--gray-100)" }}>
+              <div
+                className="flex justify-between items-center pt-2 border-t"
+                style={{ borderColor: "var(--gray-100)" }}
+              >
                 <button
-                  onClick={() => {
-                    setActionFilter("all");
-                    setSourceFilter("all");
-                  }}
+                  onClick={() => setActionFilter("all")}
                   className="text-xs underline"
-                  style={{ color: "var(--ink-500)", background: "none", border: "none", cursor: "pointer" }}
+                  style={{
+                    color: "var(--ink-500)",
+                    background: "none",
+                    border: "none",
+                    cursor: "pointer",
+                  }}
                 >
                   Clear
                 </button>
@@ -263,7 +285,7 @@ export function ActivityTable({ rows }: { rows: ActivityRow[] }) {
         <div
           className="grid uppercase tracking-[0.06em]"
           style={{
-            gridTemplateColumns: "170px 1.4fr 1fr 130px 90px 70px",
+            gridTemplateColumns: "180px 1.4fr 1fr 140px 80px",
             gap: 12,
             padding: "12px 18px",
             borderBottom: "1px solid var(--gray-200)",
@@ -276,12 +298,14 @@ export function ActivityTable({ rows }: { rows: ActivityRow[] }) {
           <div>Bot</div>
           <div>Reason</div>
           <div>Action</div>
-          <div>Source</div>
           <div className="text-right">Latency</div>
         </div>
 
         {filtered.length === 0 ? (
-          <div className="text-center" style={{ padding: 48, color: "var(--ink-500)" }}>
+          <div
+            className="text-center"
+            style={{ padding: 48, color: "var(--ink-500)" }}
+          >
             {rows.length === 0
               ? "No activity yet. When a bot joins one of your meetings, it'll show here."
               : "No activity matches the current filters."}
@@ -292,12 +316,16 @@ export function ActivityTable({ rows }: { rows: ActivityRow[] }) {
               tone: "slate" as const,
               label: log.action,
             };
+            const whenText = now ? formatTimestamp(log.whenISO, now) : "—";
+            const fullTime = now
+              ? new Date(log.whenISO).toLocaleString()
+              : log.whenISO;
             return (
               <div
                 key={log.id}
                 className="grid items-center"
                 style={{
-                  gridTemplateColumns: "170px 1.4fr 1fr 130px 90px 70px",
+                  gridTemplateColumns: "180px 1.4fr 1fr 140px 80px",
                   gap: 12,
                   padding: "14px 18px",
                   borderTop: i === 0 ? "none" : "1px solid var(--gray-100)",
@@ -305,10 +333,11 @@ export function ActivityTable({ rows }: { rows: ActivityRow[] }) {
                 }}
               >
                 <div
-                  className="font-mono"
-                  style={{ fontSize: 11, color: "var(--ink-500)" }}
+                  className="font-medium"
+                  style={{ fontSize: 12, color: "var(--ink-700)" }}
+                  title={fullTime}
                 >
-                  {log.whenFormatted}
+                  {whenText}
                 </div>
                 <div>
                   <div
@@ -346,12 +375,6 @@ export function ActivityTable({ rows }: { rows: ActivityRow[] }) {
                       {log.error}
                     </div>
                   )}
-                </div>
-                <div
-                  className="font-mono"
-                  style={{ fontSize: 11, color: "var(--ink-500)" }}
-                >
-                  {log.source}
                 </div>
                 <div
                   className="text-right font-mono"
