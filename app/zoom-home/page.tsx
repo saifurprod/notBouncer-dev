@@ -231,7 +231,10 @@ export default function ZoomHomePage() {
         });
         const latencyMs = Date.now() - startedAt;
         appendLog("success", `Sent to waiting room: ${bot.name} (${latencyMs}ms)`);
-        addToBlocklist(bot.name, bot.email);
+        // NOTE: deliberately NOT adding to blocklist here. Waiting room is
+        // a reversible action — if the host later admits the bot, we should
+        // treat that as explicit consent to let them in. Only `removeParticipant`
+        // is final and blocklists the bot.
         setDetectedBots((prev) =>
           prev.map((b) =>
             b.participantUUID === bot.participantUUID
