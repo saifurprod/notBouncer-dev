@@ -1,4 +1,13 @@
 import { prisma } from "@/lib/db";
+import { Icon } from "@/lib/ui/icons";
+import {
+  StatusPill,
+  SectionLabel,
+  BrandMark,
+  Avatar,
+} from "@/lib/ui/components";
+import { ActivityTable, ActivityRow } from "./activity-table";
+import { generateInsight } from "@/lib/insights";
 
 export const dynamic = "force-dynamic";
 
@@ -7,202 +16,483 @@ export default async function DashboardPage({
 }: {
   searchParams: { installed?: string };
 }) {
-  const logs = await prisma.auditLog.findMany({
-    orderBy: { createdAt: "desc" },
-    take: 100,
+  // Pull everything we need in parallel
+  const [users, recentLogs, allLogsForInsight, monthCount, last48hCount] =
+    await Promise.all([
+      prisma.user.findMany({
+        where: { deauthorizedAt: null },
+        orderBy: { installedAt: "desc" },
+      }),
+      prisma.auditLog.findMany({
+        orderBy: { createdAt: "desc" },
+        take: 100,
+      }),
+      prisma.auditLog.findMany({
+        orderBy: { createdAt: "desc" },
+        take: 500,
+      }),
+      prisma.auditLog.count({
+        where: {
+          createdAt: {
+            gte: new Date(
+              new Date().getFullYear(),
+              new Date().getMonth(),
+              1
+            ),
+          },
+          action: { in: ["detected", "removed", "moved_to_waiting_room"] },
+        },
+      }),
+      prisma.auditLog.count({
+        where: {
+          createdAt: { gte: new Date(Date.now() - 48 * 60 * 60 * 1000) },
+        },
+      }),
+    ]);
+
+  // Stats — counted over the last 7 days for the "this week" deltas
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const last7Days = await prisma.auditLog.findMany({
+    where: { createdAt: { gte: sevenDaysAgo } },
+    select: { action: true },
   });
 
-  const users = await prisma.user.findMany({
-    where: { deauthorizedAt: null },
-    select: { email: true, displayName: true, installedAt: true },
-  });
+  const total = {
+    detected: allLogsForInsight.filter((l) => l.action === "detected").length +
+      allLogsForInsight.filter(
+        (l) => l.action === "removed" || l.action === "moved_to_waiting_room"
+      ).length,
+    removed: allLogsForInsight.filter((l) => l.action === "removed").length,
+    waiting: allLogsForInsight.filter(
+      (l) => l.action === "moved_to_waiting_room"
+    ).length,
+    failed: allLogsForInsight.filter((l) => l.action === "remove_failed")
+      .length,
+  };
+  const week = {
+    detected: last7Days.filter(
+      (l) =>
+        l.action === "detected" ||
+        l.action === "removed" ||
+        l.action === "moved_to_waiting_room"
+    ).length,
+    removed: last7Days.filter((l) => l.action === "removed").length,
+    waiting: last7Days.filter((l) => l.action === "moved_to_waiting_room")
+      .length,
+    failed: last7Days.filter((l) => l.action === "remove_failed").length,
+  };
 
-  const justInstalled = searchParams.installed === "1";
+  // AI insight — currently rule-based via generateInsight()
+  const insight = generateInsight(
+    allLogsForInsight.map((l) => ({
+      participantName: l.participantName,
+      matchReason: l.matchReason,
+      action: l.action,
+      latencyMs: l.latencyMs,
+      source: l.source,
+      errorMessage: l.errorMessage,
+      createdAt: l.createdAt,
+    }))
+  );
 
-  // Stats
-  const totalDetected = logs.filter(
-    (l) => l.action === "detected" || l.action === "removed"
-  ).length;
-  const totalRemoved = logs.filter((l) => l.action === "removed").length;
-  const totalFailed = logs.filter((l) => l.action === "remove_failed").length;
+  // For the hero: stat sentence
+  const heroStat = `${monthCount} bot${monthCount === 1 ? "" : "s"} stopped this month.`;
+  const heroSub =
+    last48hCount === 0
+      ? "No notetaker has crashed your meetings unannounced in the last 48 hours."
+      : `${last48hCount} bot event${last48hCount === 1 ? "" : "s"} in the last 48 hours.`;
+
+  const primaryHost = users[0];
+  const hostFirstName = primaryHost?.displayName?.split(" ")[0] ?? "Host";
+
+  // Convert audit logs to activity rows
+  const rows: ActivityRow[] = recentLogs.map((l) => ({
+    id: String(l.id),
+    when: l.createdAt.toISOString(),
+    whenFormatted: l.createdAt
+      .toISOString()
+      .slice(0, 19)
+      .replace("T", " "),
+    name: l.participantName,
+    email: l.participantEmail,
+    reason: l.matchReason,
+    action: l.action,
+    source: l.source,
+    latency: l.latencyMs,
+    error: l.errorMessage,
+  }));
 
   return (
-    <main className="min-h-screen px-6 py-12 max-w-5xl mx-auto">
-      <header className="flex items-baseline justify-between mb-12">
-        <div>
-          <p className="font-mono text-xs uppercase tracking-[0.2em] text-stone-500">
-            Dashboard
-          </p>
-          <h1 className="font-display text-5xl mt-1">NoteBouncer</h1>
-        </div>
-        <div className="text-right text-sm text-stone-600 font-mono">
-          {users.length} {users.length === 1 ? "host" : "hosts"} installed
-        </div>
-      </header>
+    <main className="min-h-screen" style={{ background: "var(--canvas-lavender)" }}>
+      <div className="max-w-[1280px] mx-auto px-14 pt-12 pb-24">
+        <NBHeader
+          breadcrumb="Activity"
+          stat={heroStat}
+          statSub={heroSub}
+          hostName={hostFirstName}
+          fullHostName={primaryHost?.displayName ?? "—"}
+        />
 
-      {justInstalled && (
-        <div className="mb-10 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-          ✓ Installed successfully. Open NoteBouncer from Zoom's Apps panel
-          during a meeting to enable auto-removal of bots.
-        </div>
-      )}
-
-      {/* Stats */}
-      <section className="mb-12 grid grid-cols-3 gap-4">
-        <Stat label="Bots detected" value={totalDetected} />
-        <Stat label="Removed by sidebar" value={totalRemoved} accent="emerald" />
-        <Stat label="Removal failed" value={totalFailed} accent="red" />
-      </section>
-
-      {/* Hosts */}
-      <section className="mb-12">
-        <h2 className="font-display text-2xl mb-4">Connected hosts</h2>
-        {users.length === 0 ? (
-          <p className="text-sm text-stone-500">No hosts installed yet.</p>
-        ) : (
-          <ul className="divide-y divide-stone-200 border border-stone-200 rounded-md bg-white">
-            {users.map((u) => (
-              <li
-                key={u.email}
-                className="flex items-center justify-between px-4 py-3"
-              >
-                <div>
-                  <div className="font-medium">{u.displayName ?? "—"}</div>
-                  <div className="text-sm text-stone-500 font-mono">
-                    {u.email}
-                  </div>
-                </div>
-                <div className="text-xs text-stone-400 font-mono">
-                  installed {u.installedAt.toISOString().slice(0, 10)}
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-
-      {/* Activity */}
-      <section>
-        <h2 className="font-display text-2xl mb-4">Activity</h2>
-        {logs.length === 0 ? (
-          <div className="rounded-md border border-dashed border-stone-300 bg-white px-6 py-12 text-center">
-            <p className="font-display text-xl text-stone-700">
-              No bots have crashed your meetings yet.
-            </p>
-            <p className="mt-2 text-sm text-stone-500">
-              When a notetaker joins one of your meetings, you'll see it here.
-            </p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto rounded-md border border-stone-200 bg-white">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-stone-200 bg-stone-50">
-                  <th className="px-4 py-3 text-left font-medium text-stone-700">
-                    When
-                  </th>
-                  <th className="px-4 py-3 text-left font-medium text-stone-700">
-                    Bot
-                  </th>
-                  <th className="px-4 py-3 text-left font-medium text-stone-700">
-                    Reason
-                  </th>
-                  <th className="px-4 py-3 text-left font-medium text-stone-700">
-                    Action
-                  </th>
-                  <th className="px-4 py-3 text-left font-medium text-stone-700">
-                    Source
-                  </th>
-                  <th className="px-4 py-3 text-right font-medium text-stone-700">
-                    Latency
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-stone-100">
-                {logs.map((log) => (
-                  <tr key={String(log.id)}>
-                    <td className="px-4 py-3 text-stone-500 font-mono text-xs whitespace-nowrap">
-                      {log.createdAt
-                        .toISOString()
-                        .slice(0, 19)
-                        .replace("T", " ")}
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="font-medium">
-                        {log.participantName ?? "—"}
-                      </div>
-                      {log.participantEmail && (
-                        <div className="text-xs text-stone-500 font-mono">
-                          {log.participantEmail}
-                        </div>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 font-mono text-xs text-stone-600">
-                      {log.matchReason}
-                    </td>
-                    <td className="px-4 py-3">
-                      <ActionBadge action={log.action} />
-                      {log.errorMessage && (
-                        <div className="text-xs text-red-600 mt-1 max-w-xs truncate">
-                          {log.errorMessage}
-                        </div>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-xs text-stone-500 font-mono">
-                      {log.source}
-                    </td>
-                    <td className="px-4 py-3 text-right font-mono text-xs text-stone-500">
-                      {log.latencyMs ? `${log.latencyMs}ms` : "—"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        {searchParams.installed === "1" && (
+          <div
+            className="mt-8 rounded-2xl px-5 py-4 flex items-center gap-3"
+            style={{
+              background: "var(--emerald-50)",
+              border: "1px solid var(--emerald-100)",
+              color: "var(--emerald-600)",
+            }}
+          >
+            <Icon name="check" size={18} />
+            <div style={{ fontSize: 13 }}>
+              Installed successfully. Open NoteBouncer from Zoom's Apps panel
+              during your next meeting to enable auto-removal.
+            </div>
           </div>
         )}
-      </section>
+
+        <div className="flex flex-col gap-10 mt-10">
+          {insight && <InsightCard insight={insight} />}
+
+          <div>
+            <SectionLabel>System intelligence</SectionLabel>
+            <StatsCard total={total} week={week} />
+          </div>
+
+          {users.length > 0 && (
+            <div>
+              <SectionLabel>Operations</SectionLabel>
+              <HostsCard users={users} />
+            </div>
+          )}
+
+          <div>
+            <SectionLabel>Activity log</SectionLabel>
+            <ActivityTable rows={rows} />
+          </div>
+        </div>
+      </div>
     </main>
   );
 }
 
-function Stat({
-  label,
-  value,
-  accent,
+function NBHeader({
+  breadcrumb,
+  stat,
+  statSub,
+  hostName,
+  fullHostName,
 }: {
-  label: string;
-  value: number;
-  accent?: "emerald" | "red";
+  breadcrumb: string;
+  stat: string;
+  statSub: string;
+  hostName: string;
+  fullHostName: string;
 }) {
-  const valueColor =
-    accent === "emerald"
-      ? "text-emerald-700"
-      : accent === "red"
-        ? "text-red-700"
-        : "text-stone-900";
   return (
-    <div className="bg-white border border-stone-200 rounded-md p-4">
-      <div className="text-xs uppercase tracking-wider text-stone-500 mb-1">
-        {label}
+    <div>
+      <div className="mb-6" style={{ fontSize: 12, color: "var(--ink-500)" }}>
+        <span style={{ color: "rgb(107,101,127)" }}>Home</span>
+        <span style={{ color: "rgb(154,149,186)", margin: "0 8px" }}>›</span>
+        <span style={{ color: "#000", fontWeight: 500 }}>{breadcrumb}</span>
       </div>
-      <div className={`font-display text-3xl ${valueColor}`}>{value}</div>
+
+      <div className="flex items-start justify-between gap-8 flex-wrap">
+        <div className="flex items-start gap-5">
+          <div style={{ marginTop: 22 }}>
+            <BrandMark size={48} iconSize={22} />
+          </div>
+          <div>
+            <div
+              className="mb-2"
+              style={{
+                fontSize: 16,
+                fontWeight: 500,
+                letterSpacing: "0.044em",
+                color: "rgb(100,96,94)",
+              }}
+            >
+              {hostName}'s Bouncer Control
+            </div>
+            <h1
+              className="m-0 font-light"
+              style={{
+                fontSize: 48,
+                lineHeight: 0.85,
+                letterSpacing: "-0.02em",
+                color: "var(--ink-900)",
+                maxWidth: 720,
+              }}
+            >
+              {stat}
+            </h1>
+            <div
+              className="mt-3"
+              style={{
+                fontSize: 14,
+                color: "var(--ink-600)",
+                maxWidth: 540,
+              }}
+            >
+              {statSub}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex flex-col items-end gap-5">
+          <div
+            style={{
+              color: "var(--sage-plum)",
+              fontWeight: 600,
+              fontSize: 18,
+              letterSpacing: "-0.02em",
+            }}
+          >
+            notebouncer
+          </div>
+          <div className="flex items-center gap-3" style={{ color: "rgb(132,133,134)" }}>
+            <Avatar name={fullHostName} size={32} />
+            <span style={{ fontSize: 14, fontWeight: 500, color: "var(--ink-700)" }}>
+              {fullHostName}
+            </span>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
 
-function ActionBadge({ action }: { action: string }) {
-  const styles: Record<string, string> = {
-    detected: "bg-amber-50 text-amber-700 border-amber-200",
-    removed: "bg-emerald-50 text-emerald-700 border-emerald-200",
-    remove_failed: "bg-red-50 text-red-700 border-red-200",
-    dry_run: "bg-stone-50 text-stone-700 border-stone-200",
-  };
-  const cls = styles[action] ?? "bg-stone-50 text-stone-700 border-stone-200";
+function InsightCard({
+  insight,
+}: {
+  insight: { headline: string; body: string };
+}) {
   return (
-    <span
-      className={`inline-flex items-center rounded border px-2 py-0.5 font-mono text-xs ${cls}`}
+    <div
+      className="glass-card flex items-start gap-[18px]"
+      style={{ padding: 24 }}
     >
-      {action.replace(/_/g, " ")}
-    </span>
+      <div
+        className="rounded-xl flex-shrink-0"
+        style={{
+          width: 40,
+          height: 40,
+          background: "var(--indigo-50)",
+          color: "var(--indigo-600)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <Icon name="zap" size={20} color="var(--indigo-600)" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div
+          className="font-semibold mb-1"
+          style={{ fontSize: 14, color: "var(--ink-900)" }}
+        >
+          {insight.headline}
+        </div>
+        <div
+          style={{
+            fontSize: 13,
+            color: "var(--ink-600)",
+            lineHeight: 1.6,
+          }}
+        >
+          {insight.body}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const STAT_TONES = {
+  slate: { bg: "var(--slate-100)", fg: "var(--slate-700)" },
+  emerald: { bg: "var(--emerald-50)", fg: "var(--emerald-600)" },
+  indigo: { bg: "var(--indigo-50)", fg: "var(--indigo-600)" },
+  rose: { bg: "var(--rose-100)", fg: "#9F1239" },
+};
+
+function StatsCard({
+  total,
+  week,
+}: {
+  total: { detected: number; removed: number; waiting: number; failed: number };
+  week: { detected: number; removed: number; waiting: number; failed: number };
+}) {
+  const stats = [
+    {
+      label: "Detected",
+      tone: "slate" as const,
+      value: total.detected,
+      delta: `${signed(week.detected)} this week`,
+      icon: "bot" as const,
+    },
+    {
+      label: "Removed",
+      tone: "emerald" as const,
+      value: total.removed,
+      delta: `${signed(week.removed)} this week`,
+      icon: "trash" as const,
+    },
+    {
+      label: "Waiting",
+      tone: "indigo" as const,
+      value: total.waiting,
+      delta: `${signed(week.waiting)} this week`,
+      icon: "door-open" as const,
+    },
+    {
+      label: "Failed",
+      tone: "rose" as const,
+      value: total.failed,
+      delta: `${signed(week.failed)} this week`,
+      icon: "x" as const,
+    },
+  ];
+
+  return (
+    <div className="glass-card" style={{ padding: 28 }}>
+      <div className="flex justify-between items-start mb-1.5">
+        <div>
+          <div
+            className="font-bold"
+            style={{ fontSize: 18, color: "var(--ink-900)" }}
+          >
+            Bot Lifecycle Intelligence
+          </div>
+          <div
+            className="mt-1"
+            style={{ fontSize: 13, color: "var(--ink-600)" }}
+          >
+            Detection + removal activity across all your hosts · last 7 days
+          </div>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-5">
+        {stats.map((s) => {
+          const p = STAT_TONES[s.tone];
+          return (
+            <div
+              key={s.label}
+              className="rounded-xl flex flex-col justify-between"
+              style={{
+                padding: 20,
+                background: "rgba(255,255,255,0.7)",
+                border: "1px solid rgba(255,255,255,0.6)",
+                boxShadow: "var(--shadow-xs)",
+                minHeight: 140,
+              }}
+            >
+              <div className="flex justify-between items-center">
+                <span
+                  className="rounded-full"
+                  style={{
+                    background: p.bg,
+                    color: p.fg,
+                    fontSize: 11,
+                    fontWeight: 500,
+                    padding: "3px 10px",
+                  }}
+                >
+                  {s.label}
+                </span>
+                <Icon name={s.icon} size={14} color={p.fg} stroke={2.2} />
+              </div>
+              <div>
+                <div
+                  className="font-light"
+                  style={{
+                    fontSize: 42,
+                    color: "var(--ink-900)",
+                    lineHeight: 1,
+                    letterSpacing: "-0.02em",
+                  }}
+                >
+                  {s.value}
+                </div>
+                <div
+                  className="mt-1.5"
+                  style={{ fontSize: 11, color: "var(--ink-500)" }}
+                >
+                  {s.delta}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function signed(n: number): string {
+  if (n === 0) return "0";
+  if (n > 0) return `+${n}`;
+  return String(n);
+}
+
+function HostsCard({
+  users,
+}: {
+  users: Array<{
+    displayName: string | null;
+    email: string;
+    installedAt: Date;
+  }>;
+}) {
+  return (
+    <div className="glass-card" style={{ padding: 28 }}>
+      <div className="flex justify-between items-center mb-1">
+        <div>
+          <div
+            className="font-bold"
+            style={{ fontSize: 18, color: "var(--ink-900)" }}
+          >
+            Connected hosts
+          </div>
+          <div
+            className="mt-1"
+            style={{ fontSize: 13, color: "var(--ink-600)" }}
+          >
+            Zoom accounts authorised to NoteBouncer
+          </div>
+        </div>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 mt-5">
+        {users.map((u) => (
+          <div
+            key={u.email}
+            className="white-card flex items-center gap-3.5"
+            style={{ padding: "14px 16px" }}
+          >
+            <Avatar name={u.displayName ?? u.email} size={36} />
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <span
+                  className="font-medium truncate"
+                  style={{ fontSize: 14, color: "var(--ink-900)" }}
+                >
+                  {u.displayName ?? "—"}
+                </span>
+                <StatusPill tone="emerald">Active</StatusPill>
+              </div>
+              <div
+                className="font-mono mt-0.5 truncate"
+                style={{ fontSize: 12, color: "var(--ink-500)" }}
+              >
+                {u.email}
+              </div>
+            </div>
+            <div
+              className="text-right"
+              style={{ fontSize: 11, color: "var(--ink-500)" }}
+            >
+              <div>since {u.installedAt.toISOString().slice(0, 10)}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }

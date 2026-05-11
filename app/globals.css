@@ -2,8 +2,106 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  /* Brand */
+  --sage-plum: rgb(128, 71, 128);
+  --sage-plum-deep: rgb(103, 76, 103);
+  --sage-plum-50: rgb(245, 238, 245);
+  --sage-plum-100: rgb(233, 220, 233);
+  --sage-plum-700: rgb(99, 55, 99);
+
+  /* Canvases */
+  --canvas-lavender: rgb(217, 219, 240);
+  --canvas-sand: rgb(245, 241, 234);
+
+  /* Ink */
+  --ink-900: rgb(41, 37, 36);
+  --ink-800: rgb(68, 64, 60);
+  --ink-700: rgb(87, 83, 78);
+  --ink-600: rgb(120, 113, 108);
+  --ink-500: rgb(168, 162, 158);
+  --ink-400: rgb(214, 211, 209);
+
+  /* Accents */
+  --indigo-600: rgb(79, 70, 229);
+  --indigo-500: rgb(99, 102, 241);
+  --indigo-100: rgb(224, 231, 255);
+  --indigo-50: rgb(238, 242, 255);
+  --indigo-shadow: rgb(199, 210, 254);
+
+  --emerald-600: rgb(5, 150, 105);
+  --emerald-500: rgb(16, 185, 129);
+  --emerald-100: rgb(209, 250, 229);
+  --emerald-50: rgb(236, 253, 245);
+
+  --amber-500: rgb(245, 158, 11);
+  --amber-100: rgb(254, 243, 199);
+  --amber-50: rgb(255, 251, 235);
+
+  --rose-500: rgb(244, 63, 94);
+  --rose-100: rgb(255, 228, 230);
+
+  --slate-700: rgb(55, 65, 81);
+  --slate-500: rgb(100, 116, 139);
+  --slate-400: rgb(148, 163, 184);
+  --slate-100: rgb(241, 245, 249);
+
+  --gray-200: rgb(229, 231, 235);
+  --gray-100: rgb(243, 244, 246);
+  --stone-100: rgb(245, 245, 244);
+
+  /* Shadows */
+  --shadow-xs: 0 1px 2px 0 rgba(0, 0, 0, 0.03);
+  --shadow-card: 0 1px 2px 0 rgba(0, 0, 0, 0.03), 0 1px 3px 0 rgba(0, 0, 0, 0.05);
+  --shadow-glass: 0 4px 20px -4px rgba(0, 0, 0, 0.05);
+  --shadow-glow-indigo: 0 4px 6px -4px var(--indigo-shadow), 0 10px 15px -3px var(--indigo-shadow);
+}
+
 @layer base {
+  html,
   body {
-    font-feature-settings: "ss01", "ss02", "cv11";
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color: var(--ink-900);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    font-feature-settings: "cv11";
+  }
+
+  body {
+    background: var(--canvas-lavender);
+  }
+}
+
+@layer components {
+  .glass-card {
+    @apply rounded-2xl border;
+    background: rgba(255, 255, 255, 0.85);
+    border-color: rgba(255, 255, 255, 0.6);
+    box-shadow: var(--shadow-glass);
+    backdrop-filter: blur(12px);
+  }
+
+  .white-card {
+    @apply rounded-xl border;
+    background: #fff;
+    border-color: var(--stone-100);
+    box-shadow: var(--shadow-card);
+  }
+
+  .section-label {
+    @apply text-xs font-medium uppercase tracking-[0.11em];
+    color: var(--ink-500);
+  }
+
+  .tiny-label {
+    @apply text-[10px] font-medium uppercase tracking-[0.12em];
+    color: var(--ink-500);
+  }
+
+  .display-text {
+    font-weight: 300;
+    line-height: 0.85;
+    letter-spacing: -0.02em;
+    color: var(--ink-900);
   }
 }
