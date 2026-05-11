@@ -126,3 +126,51 @@ export function countByAction(incidents: BotIncident[]) {
     detectedOnly: incidents.filter((i) => i.action === "detected").length,
   };
 }
+
+/**
+ * A meeting summary — multiple bot incidents that all occurred in
+ * the same Zoom meeting. Used for the "By meeting" view on the dashboard.
+ */
+export type MeetingSummary = {
+  meetingId: string;
+  earliestAt: Date;
+  latestAt: Date;
+  incidents: BotIncident[];
+  counts: {
+    total: number;
+    removed: number;
+    waiting: number;
+    failed: number;
+    detectedOnly: number;
+  };
+};
+
+/**
+ * Group bot incidents by meetingId. Sorted newest-meeting-first by latest activity.
+ */
+export function groupByMeeting(incidents: BotIncident[]): MeetingSummary[] {
+  const map = new Map<string, BotIncident[]>();
+  for (const inc of incidents) {
+    const list = map.get(inc.meetingId);
+    if (list) list.push(inc);
+    else map.set(inc.meetingId, [inc]);
+  }
+
+  const summaries: MeetingSummary[] = [];
+  for (const [meetingId, list] of map.entries()) {
+    const times = list.map((i) => i.earliestAt.getTime());
+    summaries.push({
+      meetingId,
+      earliestAt: new Date(Math.min(...times)),
+      latestAt: new Date(Math.max(...times)),
+      incidents: list.sort(
+        (a, b) => b.earliestAt.getTime() - a.earliestAt.getTime()
+      ),
+      counts: countByAction(list),
+    });
+  }
+
+  return summaries.sort(
+    (a, b) => b.latestAt.getTime() - a.latestAt.getTime()
+  );
+}

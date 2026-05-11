@@ -3,9 +3,11 @@
 import { useMemo, useState, useEffect } from "react";
 import { Icon } from "@/lib/ui/icons";
 import { StatusPill, TONE_FOR_ACTION } from "@/lib/ui/components";
+import { COPY, humanizeError, humanizeErrorShort } from "@/lib/copy";
 
 export type ActivityRow = {
   id: string;
+  meetingId: string;
   whenISO: string;
   name: string | null;
   email: string | null;
@@ -15,25 +17,38 @@ export type ActivityRow = {
   error: string | null;
 };
 
-/**
- * Format a timestamp in the user's local timezone with smart relative wording.
- * Rules:
- *  - < 60 seconds → "just now"
- *  - < 60 minutes → "Nm ago"
- *  - < 24 hours and same calendar day → "Today, HH:MM AM/PM"
- *  - yesterday → "Yesterday, HH:MM AM/PM"
- *  - same year → "MMM D, HH:MM AM/PM"
- *  - older → "MMM D YYYY"
- */
+export type MeetingForClient = {
+  meetingId: string;
+  earliestISO: string;
+  latestISO: string;
+  counts: {
+    total: number;
+    removed: number;
+    waiting: number;
+    failed: number;
+    detectedOnly: number;
+  };
+  incidents: Array<{
+    id: string;
+    whenISO: string;
+    name: string | null;
+    reason: string;
+    action: string;
+    latency: number | null;
+  }>;
+};
+
+// Smart timestamp formatter — local timezone, relative wording.
 function formatTimestamp(iso: string, now: Date): string {
   const d = new Date(iso);
   const diffMs = now.getTime() - d.getTime();
   const diffMin = Math.floor(diffMs / 60_000);
-  const diffHr = Math.floor(diffMs / 3_600_000);
 
   if (diffMs < 0) {
-    // Future timestamp — just show absolute time
-    return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+    return d.toLocaleString(undefined, {
+      dateStyle: "medium",
+      timeStyle: "short",
+    });
   }
   if (diffMin < 1) return "just now";
   if (diffMin < 60) return `${diffMin}m ago`;
@@ -49,14 +64,12 @@ function formatTimestamp(iso: string, now: Date): string {
 
   if (sameDay) return `Today, ${time}`;
   if (isYesterday) return `Yesterday, ${time}`;
-
   if (d.getFullYear() === now.getFullYear()) {
     return `${d.toLocaleDateString(undefined, {
       month: "short",
       day: "numeric",
     })}, ${time}`;
   }
-
   return d.toLocaleDateString(undefined, {
     month: "short",
     day: "numeric",
@@ -64,19 +77,27 @@ function formatTimestamp(iso: string, now: Date): string {
   });
 }
 
-export function ActivityTable({ rows }: { rows: ActivityRow[] }) {
+type ViewMode = "event" | "meeting";
+
+export function ActivityCard({
+  rows,
+  meetings,
+}: {
+  rows: ActivityRow[];
+  meetings: MeetingForClient[];
+}) {
+  const [viewMode, setViewMode] = useState<ViewMode>("event");
   const [filterOpen, setFilterOpen] = useState(false);
   const [actionFilter, setActionFilter] = useState<string>("all");
-
-  // Re-render every minute so relative timestamps stay fresh
   const [now, setNow] = useState<Date | null>(null);
+
   useEffect(() => {
     setNow(new Date());
     const id = setInterval(() => setNow(new Date()), 60_000);
     return () => clearInterval(id);
   }, []);
 
-  const filtered = useMemo(() => {
+  const filteredRows = useMemo(() => {
     return rows.filter((r) => {
       if (actionFilter !== "all" && r.action !== actionFilter) return false;
       return true;
@@ -84,15 +105,7 @@ export function ActivityTable({ rows }: { rows: ActivityRow[] }) {
   }, [rows, actionFilter]);
 
   function exportCsv() {
-    const header = [
-      "when",
-      "name",
-      "email",
-      "reason",
-      "action",
-      "latency_ms",
-      "error",
-    ];
+    const header = ["when", "name", "email", "reason", "action", "latency_ms", "error"];
     const escape = (v: any) => {
       if (v == null) return "";
       const s = String(v).replace(/"/g, '""');
@@ -100,7 +113,7 @@ export function ActivityTable({ rows }: { rows: ActivityRow[] }) {
     };
     const lines = [
       header.join(","),
-      ...filtered.map((r) =>
+      ...filteredRows.map((r) =>
         [
           r.whenISO,
           r.name ?? "",
@@ -125,73 +138,97 @@ export function ActivityTable({ rows }: { rows: ActivityRow[] }) {
   }
 
   const hasFilters = actionFilter !== "all";
+  const isEmpty = rows.length === 0;
 
   return (
-    <div className="glass-card p-7">
-      <div className="flex justify-between items-start mb-1">
-        <div>
+    <div className="glass-card" style={{ padding: "20px" }}>
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-4 mb-4">
+        <div className="min-w-0">
           <div
             className="font-bold"
             style={{ fontSize: 18, color: "var(--ink-900)" }}
           >
-            Activity
+            {COPY.activityTitle}
           </div>
-          <div
-            className="mt-1"
-            style={{ fontSize: 13, color: "var(--ink-600)" }}
-          >
-            Every bot caught in your meetings, newest first
+          <div className="mt-1" style={{ fontSize: 13, color: "var(--ink-600)" }}>
+            {viewMode === "event"
+              ? COPY.activitySubtitleEvent
+              : COPY.activitySubtitleMeeting}
           </div>
         </div>
-        <div className="flex gap-2 relative">
-          <button
-            onClick={() => setFilterOpen((v) => !v)}
-            className="rounded-full bg-white cursor-pointer inline-flex items-center gap-1.5"
+        <div className="flex gap-2 items-center flex-wrap relative">
+          {/* View toggle */}
+          <div
+            className="flex rounded-full p-0.5"
             style={{
-              fontSize: 12,
-              fontWeight: 500,
-              padding: "7px 12px",
-              border: hasFilters
-                ? "1px solid var(--sage-plum)"
-                : "1px solid var(--gray-200)",
-              color: hasFilters ? "var(--sage-plum)" : "var(--ink-700)",
+              background: "rgba(255,255,255,0.6)",
+              border: "1px solid var(--gray-200)",
             }}
           >
-            <Icon name="filter" size={12} />
-            Filter
-            {hasFilters && (
-              <span
-                className="rounded-full"
-                style={{
-                  background: "var(--sage-plum)",
-                  color: "#fff",
-                  fontSize: 10,
-                  padding: "1px 5px",
-                  marginLeft: 2,
-                }}
-              >
-                on
-              </span>
-            )}
-          </button>
+            <SegBtn
+              label={COPY.groupByEvent}
+              active={viewMode === "event"}
+              onClick={() => setViewMode("event")}
+            />
+            <SegBtn
+              label={COPY.groupByMeeting}
+              active={viewMode === "meeting"}
+              onClick={() => setViewMode("meeting")}
+            />
+          </div>
+          {viewMode === "event" && (
+            <button
+              onClick={() => setFilterOpen((v) => !v)}
+              className="rounded-full bg-white cursor-pointer inline-flex items-center gap-1.5"
+              style={{
+                fontSize: 12,
+                fontWeight: 500,
+                padding: "7px 12px",
+                border: hasFilters
+                  ? "1px solid var(--sage-plum)"
+                  : "1px solid var(--gray-200)",
+                color: hasFilters ? "var(--sage-plum)" : "var(--ink-700)",
+              }}
+            >
+              <Icon name="filter" size={12} />
+              {COPY.filterButton}
+              {hasFilters && (
+                <span
+                  className="rounded-full"
+                  style={{
+                    background: "var(--sage-plum)",
+                    color: "#fff",
+                    fontSize: 10,
+                    padding: "1px 5px",
+                    marginLeft: 2,
+                  }}
+                >
+                  on
+                </span>
+              )}
+            </button>
+          )}
           <button
             onClick={exportCsv}
-            className="rounded-full bg-white cursor-pointer inline-flex items-center gap-1.5"
+            disabled={isEmpty}
+            className="rounded-full bg-white inline-flex items-center gap-1.5"
             style={{
               fontSize: 12,
               fontWeight: 500,
               padding: "7px 12px",
               border: "1px solid var(--gray-200)",
               color: "var(--ink-700)",
+              cursor: isEmpty ? "not-allowed" : "pointer",
+              opacity: isEmpty ? 0.4 : 1,
             }}
           >
             <Icon name="download" size={12} />
-            Export
+            {COPY.exportButton}
           </button>
 
           {filterOpen && (
             <div
-              className="absolute right-0 top-10 z-10 rounded-xl p-4"
+              className="absolute right-0 top-12 z-10 rounded-xl p-4"
               style={{
                 background: "#fff",
                 border: "1px solid var(--gray-200)",
@@ -202,42 +239,41 @@ export function ActivityTable({ rows }: { rows: ActivityRow[] }) {
               <div className="mb-3">
                 <div
                   className="mb-2 uppercase tracking-[0.06em]"
-                  style={{
-                    fontSize: 10,
-                    fontWeight: 500,
-                    color: "var(--ink-500)",
-                  }}
+                  style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-500)" }}
                 >
-                  Action
+                  {COPY.filterActionLabel}
                 </div>
                 <div className="flex flex-wrap gap-1">
-                  {["all", "detected", "removed", "moved_to_waiting_room", "remove_failed"].map(
-                    (a) => (
-                      <button
-                        key={a}
-                        onClick={() => setActionFilter(a)}
-                        className="rounded-full"
-                        style={{
-                          fontSize: 11,
-                          padding: "4px 10px",
-                          background:
-                            actionFilter === a
-                              ? "var(--sage-plum)"
-                              : "var(--gray-100)",
-                          color:
-                            actionFilter === a ? "#fff" : "var(--ink-700)",
-                          border: "none",
-                          cursor: "pointer",
-                        }}
-                      >
-                        {a === "moved_to_waiting_room"
-                          ? "Waiting room"
-                          : a === "remove_failed"
-                            ? "Failed"
-                            : a.charAt(0).toUpperCase() + a.slice(1)}
-                      </button>
-                    )
-                  )}
+                  {[
+                    "all",
+                    "detected",
+                    "removed",
+                    "moved_to_waiting_room",
+                    "remove_failed",
+                  ].map((a) => (
+                    <button
+                      key={a}
+                      onClick={() => setActionFilter(a)}
+                      className="rounded-full"
+                      style={{
+                        fontSize: 11,
+                        padding: "4px 10px",
+                        background:
+                          actionFilter === a
+                            ? "var(--sage-plum)"
+                            : "var(--gray-100)",
+                        color: actionFilter === a ? "#fff" : "var(--ink-700)",
+                        border: "none",
+                        cursor: "pointer",
+                      }}
+                    >
+                      {a === "moved_to_waiting_room"
+                        ? "Waiting room"
+                        : a === "remove_failed"
+                          ? "Failed"
+                          : a.charAt(0).toUpperCase() + a.slice(1)}
+                    </button>
+                  ))}
                 </div>
               </div>
               <div
@@ -254,7 +290,7 @@ export function ActivityTable({ rows }: { rows: ActivityRow[] }) {
                     cursor: "pointer",
                   }}
                 >
-                  Clear
+                  {COPY.filterClear}
                 </button>
                 <button
                   onClick={() => setFilterOpen(false)}
@@ -267,7 +303,7 @@ export function ActivityTable({ rows }: { rows: ActivityRow[] }) {
                     cursor: "pointer",
                   }}
                 >
-                  Done
+                  {COPY.filterDone}
                 </button>
               </div>
             </div>
@@ -275,8 +311,110 @@ export function ActivityTable({ rows }: { rows: ActivityRow[] }) {
         </div>
       </div>
 
+      {isEmpty ? (
+        <EmptyActivity firstRun />
+      ) : viewMode === "event" ? (
+        filteredRows.length === 0 ? (
+          <EmptyActivity firstRun={false} />
+        ) : (
+          <EventTable rows={filteredRows} now={now} />
+        )
+      ) : (
+        <MeetingList meetings={meetings} now={now} />
+      )}
+    </div>
+  );
+}
+
+function SegBtn({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="rounded-full whitespace-nowrap"
+      style={{
+        fontSize: 12,
+        fontWeight: 500,
+        padding: "5px 12px",
+        background: active ? "#fff" : "transparent",
+        color: active ? "var(--ink-900)" : "var(--ink-600)",
+        boxShadow: active ? "0 1px 2px rgba(0,0,0,0.05)" : "none",
+        border: "none",
+        cursor: "pointer",
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
+function EmptyActivity({ firstRun }: { firstRun: boolean }) {
+  const copy = firstRun ? COPY.emptyActivityFirst : COPY.emptyActivityFiltered;
+  return (
+    <div className="text-center py-10 px-4">
       <div
-        className="mt-[22px] rounded-xl overflow-hidden"
+        className="mx-auto mb-4 rounded-2xl flex items-center justify-center"
+        style={{
+          width: 56,
+          height: 56,
+          background: "var(--sage-plum-50)",
+          color: "var(--sage-plum)",
+        }}
+      >
+        <Icon
+          name="shield-check"
+          size={28}
+          color="var(--sage-plum)"
+          stroke={1.5}
+        />
+      </div>
+      <div
+        className="font-semibold mb-2"
+        style={{ fontSize: 16, color: "var(--ink-900)" }}
+      >
+        {copy.title}
+      </div>
+      <div
+        className="max-w-md mx-auto"
+        style={{ fontSize: 13, color: "var(--ink-600)", lineHeight: 1.6 }}
+      >
+        {copy.body}
+      </div>
+      {firstRun && "hint" in copy && (
+        <div
+          className="mt-4 inline-block rounded-full px-4 py-2"
+          style={{
+            background: "var(--canvas-lavender)",
+            fontSize: 12,
+            color: "var(--ink-700)",
+          }}
+        >
+          {(copy as { hint: string }).hint}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EventTable({
+  rows,
+  now,
+}: {
+  rows: ActivityRow[];
+  now: Date | null;
+}) {
+  return (
+    <>
+      {/* Desktop table — hidden on small screens */}
+      <div
+        className="hidden md:block rounded-xl overflow-hidden"
         style={{
           background: "rgba(255,255,255,0.7)",
           border: "1px solid rgba(255,255,255,0.6)",
@@ -300,93 +438,257 @@ export function ActivityTable({ rows }: { rows: ActivityRow[] }) {
           <div>Action</div>
           <div className="text-right">Latency</div>
         </div>
-
-        {filtered.length === 0 ? (
-          <div
-            className="text-center"
-            style={{ padding: 48, color: "var(--ink-500)" }}
-          >
-            {rows.length === 0
-              ? "No activity yet. When a bot joins one of your meetings, it'll show here."
-              : "No activity matches the current filters."}
-          </div>
-        ) : (
-          filtered.map((log, i) => {
-            const a = TONE_FOR_ACTION[log.action] ?? {
-              tone: "slate" as const,
-              label: log.action,
-            };
-            const whenText = now ? formatTimestamp(log.whenISO, now) : "—";
-            const fullTime = now
-              ? new Date(log.whenISO).toLocaleString()
-              : log.whenISO;
-            return (
+        {rows.map((log, i) => {
+          const a = TONE_FOR_ACTION[log.action] ?? {
+            tone: "slate" as const,
+            label: log.action,
+          };
+          const whenText = now ? formatTimestamp(log.whenISO, now) : "—";
+          const fullTime = now
+            ? new Date(log.whenISO).toLocaleString()
+            : log.whenISO;
+          return (
+            <div
+              key={log.id}
+              className="grid items-center"
+              style={{
+                gridTemplateColumns: "180px 1.4fr 1fr 140px 80px",
+                gap: 12,
+                padding: "14px 18px",
+                borderTop: i === 0 ? "none" : "1px solid var(--gray-100)",
+                background: i % 2 ? "transparent" : "rgba(255,255,255,0.35)",
+              }}
+            >
               <div
-                key={log.id}
-                className="grid items-center"
-                style={{
-                  gridTemplateColumns: "180px 1.4fr 1fr 140px 80px",
-                  gap: 12,
-                  padding: "14px 18px",
-                  borderTop: i === 0 ? "none" : "1px solid var(--gray-100)",
-                  background: i % 2 ? "transparent" : "rgba(255,255,255,0.35)",
-                }}
+                className="font-medium"
+                style={{ fontSize: 12, color: "var(--ink-700)" }}
+                title={fullTime}
               >
+                {whenText}
+              </div>
+              <div>
                 <div
                   className="font-medium"
-                  style={{ fontSize: 12, color: "var(--ink-700)" }}
-                  title={fullTime}
+                  style={{ fontSize: 13, color: "var(--ink-900)" }}
                 >
-                  {whenText}
+                  {log.name ?? "—"}
                 </div>
-                <div>
+                {log.email && (
                   <div
-                    className="font-medium"
-                    style={{ fontSize: 13, color: "var(--ink-900)" }}
+                    className="font-mono mt-[2px]"
+                    style={{ fontSize: 11, color: "var(--ink-500)" }}
                   >
-                    {log.name ?? "—"}
+                    {log.email}
                   </div>
-                  {log.email && (
-                    <div
-                      className="font-mono mt-[2px]"
-                      style={{ fontSize: 11, color: "var(--ink-500)" }}
-                    >
-                      {log.email}
-                    </div>
-                  )}
-                </div>
+                )}
+              </div>
+              <div
+                className="font-mono"
+                style={{ fontSize: 11, color: "var(--ink-600)" }}
+              >
+                {log.reason}
+              </div>
+              <div>
+                <StatusPill tone={a.tone}>{a.label}</StatusPill>
+                {log.error && (
+                  <div
+                    style={{
+                      fontSize: 11,
+                      color: "#9F1239",
+                      marginTop: 4,
+                      lineHeight: 1.4,
+                    }}
+                    title={log.error}
+                  >
+                    {humanizeErrorShort(log.error)}
+                  </div>
+                )}
+              </div>
+              <div
+                className="text-right font-mono"
+                style={{ fontSize: 11, color: "var(--ink-500)" }}
+              >
+                {log.latency ? `${log.latency}ms` : "—"}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Mobile cards — visible only on small screens */}
+      <div className="md:hidden flex flex-col gap-2">
+        {rows.map((log) => {
+          const a = TONE_FOR_ACTION[log.action] ?? {
+            tone: "slate" as const,
+            label: log.action,
+          };
+          const whenText = now ? formatTimestamp(log.whenISO, now) : "—";
+          return (
+            <div
+              key={log.id}
+              className="rounded-xl"
+              style={{
+                padding: 14,
+                background: "rgba(255,255,255,0.7)",
+                border: "1px solid rgba(255,255,255,0.6)",
+              }}
+            >
+              <div className="flex justify-between items-start gap-3 mb-1.5">
                 <div
-                  className="font-mono"
-                  style={{ fontSize: 11, color: "var(--ink-600)" }}
+                  className="font-medium truncate"
+                  style={{ fontSize: 14, color: "var(--ink-900)" }}
                 >
-                  {log.reason}
+                  {log.name ?? "—"}
                 </div>
-                <div>
-                  <StatusPill tone={a.tone}>{a.label}</StatusPill>
-                  {log.error && (
-                    <div
-                      className="font-mono"
-                      style={{
-                        fontSize: 11,
-                        color: "#9F1239",
-                        marginTop: 4,
-                      }}
-                    >
-                      {log.error}
-                    </div>
-                  )}
-                </div>
+                <StatusPill tone={a.tone}>{a.label}</StatusPill>
+              </div>
+              <div
+                className="font-mono mb-2"
+                style={{ fontSize: 11, color: "var(--ink-600)" }}
+              >
+                {log.reason}
+              </div>
+              <div
+                className="flex justify-between items-center"
+                style={{ fontSize: 11, color: "var(--ink-500)" }}
+              >
+                <span>{whenText}</span>
+                {log.latency && (
+                  <span className="font-mono">{log.latency}ms</span>
+                )}
+              </div>
+              {log.error && (
                 <div
-                  className="text-right font-mono"
-                  style={{ fontSize: 11, color: "var(--ink-500)" }}
+                  className="mt-2"
+                  style={{ fontSize: 11, color: "#9F1239", lineHeight: 1.4 }}
                 >
-                  {log.latency ? `${log.latency}ms` : "—"}
+                  {humanizeError(log.error)}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+function MeetingList({
+  meetings,
+  now,
+}: {
+  meetings: MeetingForClient[];
+  now: Date | null;
+}) {
+  if (meetings.length === 0) {
+    return <EmptyActivity firstRun={true} />;
+  }
+  return (
+    <div className="flex flex-col gap-3">
+      {meetings.map((m) => {
+        const whenText = now ? formatTimestamp(m.latestISO, now) : "—";
+        const idShort =
+          m.meetingId.length > 11
+            ? `${m.meetingId.slice(0, 4)}…${m.meetingId.slice(-4)}`
+            : m.meetingId;
+        return (
+          <details
+            key={m.meetingId}
+            className="rounded-xl group"
+            style={{
+              background: "rgba(255,255,255,0.7)",
+              border: "1px solid rgba(255,255,255,0.6)",
+            }}
+          >
+            <summary
+              className="cursor-pointer list-none px-4 py-3 sm:px-5 sm:py-4"
+              style={{ outline: "none" }}
+            >
+              <div className="flex justify-between items-start gap-3 flex-wrap">
+                <div className="min-w-0 flex-1">
+                  <div
+                    className="font-medium font-mono"
+                    style={{ fontSize: 12, color: "var(--ink-700)" }}
+                  >
+                    Meeting {idShort}
+                  </div>
+                  <div
+                    className="mt-0.5"
+                    style={{ fontSize: 12, color: "var(--ink-500)" }}
+                  >
+                    {whenText} · {m.counts.total} bot
+                    {m.counts.total === 1 ? "" : "s"} caught
+                  </div>
+                </div>
+                <div className="flex gap-1.5 flex-wrap">
+                  {m.counts.removed > 0 && (
+                    <StatusPill tone="emerald">
+                      {m.counts.removed} removed
+                    </StatusPill>
+                  )}
+                  {m.counts.waiting > 0 && (
+                    <StatusPill tone="indigo">
+                      {m.counts.waiting} waiting
+                    </StatusPill>
+                  )}
+                  {m.counts.detectedOnly > 0 && (
+                    <StatusPill tone="amber">
+                      {m.counts.detectedOnly} detected
+                    </StatusPill>
+                  )}
+                  {m.counts.failed > 0 && (
+                    <StatusPill tone="rose">{m.counts.failed} failed</StatusPill>
+                  )}
                 </div>
               </div>
-            );
-          })
-        )}
-      </div>
+            </summary>
+            <div
+              style={{
+                borderTop: "1px solid var(--gray-100)",
+                padding: "12px 18px",
+              }}
+            >
+              {m.incidents.map((inc, i) => {
+                const a = TONE_FOR_ACTION[inc.action] ?? {
+                  tone: "slate" as const,
+                  label: inc.action,
+                };
+                return (
+                  <div
+                    key={inc.id}
+                    className="flex justify-between items-center gap-3 flex-wrap"
+                    style={{
+                      padding: "8px 0",
+                      borderTop:
+                        i === 0 ? "none" : "1px solid var(--gray-100)",
+                    }}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div
+                        className="font-medium truncate"
+                        style={{ fontSize: 13, color: "var(--ink-900)" }}
+                      >
+                        {inc.name ?? "—"}
+                      </div>
+                      <div
+                        className="font-mono"
+                        style={{
+                          fontSize: 11,
+                          color: "var(--ink-500)",
+                          marginTop: 1,
+                        }}
+                      >
+                        {inc.reason}
+                      </div>
+                    </div>
+                    <StatusPill tone={a.tone}>{a.label}</StatusPill>
+                  </div>
+                );
+              })}
+            </div>
+          </details>
+        );
+      })}
     </div>
   );
 }

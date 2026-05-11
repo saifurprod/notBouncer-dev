@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { detect, DetectionConfig, DEFAULT_CONFIG } from "@/lib/detection";
 import { Icon } from "@/lib/ui/icons";
-import { StatusPill, BrandMark } from "@/lib/ui/components";
+import { StatusPill } from "@/lib/ui/components";
+import { COPY, humanizeError, humanizeErrorShort } from "@/lib/copy";
 
 type Status =
   | { kind: "loading" }
@@ -30,11 +31,19 @@ type DetectedBot = {
   errorMessage?: string;
 };
 
+type Toast = {
+  id: number;
+  tone: "success" | "info" | "error";
+  text: string;
+  expiresAt: number;
+};
+
 export default function ZoomHomePage() {
   const [status, setStatus] = useState<Status>({ kind: "loading" });
   const [participants, setParticipants] = useState<any[]>([]);
   const [detectedBots, setDetectedBots] = useState<DetectedBot[]>([]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [toasts, setToasts] = useState<Toast[]>([]);
   const [bulkRunning, setBulkRunning] = useState(false);
   const [actionMode, setActionMode] = useState<ActionMode>("remove");
   const [waitingRoomEnabled, setWaitingRoomEnabled] = useState<boolean | null>(null);
@@ -50,6 +59,7 @@ export default function ZoomHomePage() {
     names: new Set(),
     domains: new Set(),
   });
+  const toastIdRef = useRef(0);
 
   function normalizeName(name: string): string {
     return name
@@ -76,6 +86,15 @@ export default function ZoomHomePage() {
 
   function appendLog(level: LogEntry["level"], text: string) {
     setLogs((prev) => [{ ts: Date.now(), level, text }, ...prev].slice(0, 100));
+  }
+
+  function showToast(tone: Toast["tone"], text: string, durationMs = 3500) {
+    const id = ++toastIdRef.current;
+    const expiresAt = Date.now() + durationMs;
+    setToasts((prev) => [...prev, { id, tone, text, expiresAt }]);
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, durationMs);
   }
 
   async function syncEvent(payload: {
@@ -122,6 +141,7 @@ export default function ZoomHomePage() {
       await sdk.removeParticipant({ participantUUID: uuid });
       const latencyMs = Date.now() - startedAt;
       appendLog("success", `Auto-removed: ${name} (${latencyMs}ms)`);
+      showToast("success", `${name} tried to rejoin — kicked again`);
       await syncEvent({
         participantName: name,
         participantEmail: email ?? undefined,
@@ -132,7 +152,7 @@ export default function ZoomHomePage() {
       });
     } catch (err: any) {
       const msg = err?.message ?? String(err);
-      appendLog("error", `Auto-kick failed for ${name}: ${msg}`);
+      appendLog("error", `Auto-kick failed for ${name}: ${humanizeErrorShort(msg)}`);
       await syncEvent({
         participantName: name,
         participantEmail: email ?? undefined,
@@ -191,6 +211,7 @@ export default function ZoomHomePage() {
     const sdk = sdkRef.current;
     if (!sdk) {
       appendLog("error", "SDK not available");
+      showToast("error", "Zoom SDK not ready");
       return;
     }
     if (bot.status !== "pending" && bot.status !== "failed") return;
@@ -209,6 +230,7 @@ export default function ZoomHomePage() {
         await sdk.removeParticipant({ participantUUID: bot.participantUUID });
         const latencyMs = Date.now() - startedAt;
         appendLog("success", `Removed: ${bot.name} (${latencyMs}ms)`);
+        showToast("success", COPY.sidebarToastRemoved(bot.name));
         addToBlocklist(bot.name, bot.email);
         setDetectedBots((prev) =>
           prev.map((b) =>
@@ -231,10 +253,8 @@ export default function ZoomHomePage() {
         });
         const latencyMs = Date.now() - startedAt;
         appendLog("success", `Sent to waiting room: ${bot.name} (${latencyMs}ms)`);
-        // NOTE: deliberately NOT adding to blocklist here. Waiting room is
-        // a reversible action — if the host later admits the bot, we should
-        // treat that as explicit consent to let them in. Only `removeParticipant`
-        // is final and blocklists the bot.
+        showToast("success", COPY.sidebarToastWaiting(bot.name));
+        // Deliberately not blocklisting on waiting-room — admit-back is reversible.
         setDetectedBots((prev) =>
           prev.map((b) =>
             b.participantUUID === bot.participantUUID
@@ -253,7 +273,9 @@ export default function ZoomHomePage() {
       }
     } catch (err: any) {
       const msg = err?.message ?? String(err);
-      appendLog("error", `Action failed for ${bot.name}: ${msg}`);
+      const human = humanizeErrorShort(msg);
+      appendLog("error", `Action failed for ${bot.name}: ${human}`);
+      showToast("error", `${COPY.sidebarToastFailed(bot.name)}: ${human}`);
       setDetectedBots((prev) =>
         prev.map((b) =>
           b.participantUUID === bot.participantUUID
@@ -278,10 +300,8 @@ export default function ZoomHomePage() {
     );
     if (pending.length === 0) return;
     if (actionMode === "waiting_room" && waitingRoomEnabled === false) {
-      appendLog(
-        "error",
-        "Waiting room is disabled in this meeting. Enable it in Zoom's Security menu first, or switch to Remove."
-      );
+      appendLog("error", COPY.sidebarWaitingRoomOff);
+      showToast("error", "Waiting room is off — turn it on first");
       return;
     }
     setBulkRunning(true);
@@ -342,7 +362,10 @@ export default function ZoomHomePage() {
         `Waiting room: ${enabled === true ? "enabled" : enabled === false ? "disabled" : "unknown"}`
       );
     } catch (err: any) {
-      appendLog("warn", `Couldn't read waiting room state: ${err?.message ?? err}`);
+      appendLog(
+        "warn",
+        `Couldn't read waiting room state: ${humanizeErrorShort(err?.message ?? err)}`
+      );
       setWaitingRoomEnabled(null);
     }
   }
@@ -459,7 +482,7 @@ export default function ZoomHomePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Tick clock every minute for the meeting elapsed time
+  // Tick clock periodically for meeting elapsed
   const [, setNow] = useState(0);
   useEffect(() => {
     const id = setInterval(() => setNow((n) => n + 1), 30000);
@@ -474,7 +497,6 @@ export default function ZoomHomePage() {
   ).length;
   const waitingRoomSelectable = waitingRoomEnabled !== false;
   const inMeeting = status.kind === "in_meeting";
-
   const meetingElapsed = formatElapsed(Date.now() - meetingStartRef.current);
 
   return (
@@ -482,12 +504,22 @@ export default function ZoomHomePage() {
       className="min-h-screen flex justify-center items-start font-sans"
       style={{ background: "var(--canvas-lavender)", padding: 16 }}
     >
+      {/* Toast container — fixed top of viewport */}
       <div
-        className="rounded-2xl"
+        className="fixed left-1/2 -translate-x-1/2 z-50 flex flex-col gap-2 pointer-events-none"
+        style={{ top: 12, maxWidth: 320, width: "calc(100% - 24px)" }}
+      >
+        {toasts.map((t) => (
+          <ToastItem key={t.id} toast={t} />
+        ))}
+      </div>
+
+      <div
+        className="rounded-2xl w-full"
         style={{
-          width: 340,
+          maxWidth: 380,
           background: "var(--canvas-lavender)",
-          padding: "20px 18px 24px",
+          padding: "18px 16px 22px",
           boxShadow: "0 8px 32px -8px rgba(0,0,0,0.12)",
         }}
       >
@@ -527,18 +559,18 @@ export default function ZoomHomePage() {
                   letterSpacing: "0.04em",
                 }}
               >
-                Sidebar · v0.2
+                {COPY.sidebarVersion}
               </div>
             </div>
           </div>
           <StatusBadge status={status} />
         </div>
 
-        {inMeeting && (
+        {inMeeting ? (
           <>
             {/* Current meeting card */}
             <div className="glass-card mb-3.5" style={{ padding: 14 }}>
-              <div className="tiny-label">Current meeting</div>
+              <div className="tiny-label">{COPY.sidebarCurrentMeeting}</div>
               <div
                 className="mt-1"
                 style={{
@@ -556,8 +588,8 @@ export default function ZoomHomePage() {
               >
                 <span className="inline-flex items-center gap-1">
                   <Icon name="users" size={11} />
-                  {participants.length}{" "}
-                  {participants.length === 1 ? "participant" : "participants"}
+                  {participants.length}
+                  {participants.length === 1 ? " participant" : " participants"}
                 </span>
                 <span
                   style={{
@@ -577,14 +609,14 @@ export default function ZoomHomePage() {
             {/* Action mode toggle */}
             <div className="mb-3.5">
               <div className="flex justify-between items-center mb-1.5">
-                <div className="tiny-label">Action when removing</div>
+                <div className="tiny-label">{COPY.sidebarActionLabel}</div>
                 <button
                   onClick={refreshWaitingRoomState}
                   className="bg-transparent border-none cursor-pointer inline-flex items-center gap-1"
                   style={{ fontSize: 10, color: "var(--ink-500)" }}
                 >
                   <Icon name="refresh" size={10} />
-                  Recheck
+                  {COPY.sidebarRecheck}
                 </button>
               </div>
               <div
@@ -598,29 +630,29 @@ export default function ZoomHomePage() {
                 <ToggleButton
                   active={actionMode === "remove"}
                   onClick={() => setActionMode("remove")}
-                  label="Remove"
+                  label={COPY.sidebarActionRemove}
                 />
                 <ToggleButton
                   active={actionMode === "waiting_room"}
                   onClick={() => {
                     if (waitingRoomSelectable) setActionMode("waiting_room");
                   }}
-                  label="Waiting room"
+                  label={COPY.sidebarActionWaiting}
                   disabled={!waitingRoomSelectable}
                 />
               </div>
               {!waitingRoomSelectable && (
                 <p
                   className="mt-1.5"
-                  style={{ fontSize: 11, color: "var(--ink-500)" }}
+                  style={{ fontSize: 11, color: "var(--ink-500)", lineHeight: 1.5 }}
                 >
-                  Waiting room appears disabled.{" "}
+                  {COPY.sidebarWaitingRoomOff}{" "}
                   <button
                     onClick={refreshWaitingRoomState}
                     className="underline bg-transparent border-none cursor-pointer p-0"
                     style={{ color: "var(--ink-700)" }}
                   >
-                    Recheck
+                    {COPY.sidebarRecheck}
                   </button>
                   .
                 </p>
@@ -630,7 +662,7 @@ export default function ZoomHomePage() {
             {/* Detected bots */}
             <div className="flex justify-between items-center mb-1.5">
               <div className="tiny-label">
-                Detected bots · {pendingCount} pending
+                {COPY.sidebarDetectedHeader} · {pendingCount} pending
               </div>
               {resolvedCount > 0 && (
                 <button
@@ -638,7 +670,7 @@ export default function ZoomHomePage() {
                   className="bg-transparent border-none cursor-pointer"
                   style={{ fontSize: 10, color: "var(--ink-500)" }}
                 >
-                  Clear resolved
+                  {COPY.sidebarClearResolved}
                 </button>
               )}
             </div>
@@ -647,7 +679,7 @@ export default function ZoomHomePage() {
               <button
                 onClick={actOnAllPending}
                 disabled={bulkRunning}
-                className="w-full text-white border-none cursor-pointer inline-flex items-center justify-center gap-1.5 mb-2.5"
+                className="w-full text-white border-none inline-flex items-center justify-center gap-1.5 mb-2.5"
                 style={{
                   padding: "10px 12px",
                   borderRadius: 10,
@@ -661,6 +693,7 @@ export default function ZoomHomePage() {
                     actionMode === "waiting_room"
                       ? "var(--shadow-glow-indigo)"
                       : "none",
+                  cursor: bulkRunning ? "not-allowed" : "pointer",
                   opacity: bulkRunning ? 0.6 : 1,
                 }}
               >
@@ -674,34 +707,31 @@ export default function ZoomHomePage() {
                 {bulkRunning
                   ? "Working…"
                   : actionMode === "remove"
-                    ? `Remove all bots (${pendingCount})`
-                    : `Send all to waiting room (${pendingCount})`}
+                    ? COPY.sidebarRemoveAll(pendingCount)
+                    : COPY.sidebarSendAll(pendingCount)}
               </button>
             )}
 
-            {detectedBots.length === 0 && (
-              <div
-                className="text-center py-3"
-                style={{ fontSize: 12, color: "var(--ink-500)" }}
-              >
-                Watching for notetaker bots…
+            {detectedBots.length === 0 ? (
+              <SidebarEmpty />
+            ) : (
+              <div className="flex flex-col gap-2 mb-4">
+                {detectedBots.map((b) => (
+                  <BotCard
+                    key={b.participantUUID}
+                    bot={b}
+                    mode={actionMode}
+                    onAct={() => actOnBot(b, actionMode)}
+                    disabled={bulkRunning}
+                  />
+                ))}
               </div>
             )}
 
-            <div className="flex flex-col gap-2 mb-4">
-              {detectedBots.map((b) => (
-                <BotCard
-                  key={b.participantUUID}
-                  bot={b}
-                  mode={actionMode}
-                  onAct={() => actOnBot(b, actionMode)}
-                  disabled={bulkRunning}
-                />
-              ))}
-            </div>
-
             {/* In meeting */}
-            <div className="tiny-label">In meeting · {participants.length}</div>
+            <div className="tiny-label mt-4">
+              {COPY.sidebarParticipantsHeader} · {participants.length}
+            </div>
             <div
               className="glass-card mt-1.5 mb-4"
               style={{
@@ -712,18 +742,19 @@ export default function ZoomHomePage() {
             >
               {participants.length === 0 ? (
                 <div
-                  className="py-2"
+                  className="py-2 text-center"
                   style={{ fontSize: 12, color: "var(--ink-500)" }}
                 >
-                  No participants yet
+                  Waiting for participants…
                 </div>
               ) : (
                 participants.map((p, i) => {
                   const name =
                     p.screenName ?? p.userName ?? p.displayName ?? "(unknown)";
-                  const isBot = /otter|fireflies|krisp|fathom|fireflies|notetaker|tl;?dv|granola|read\.?ai|fellow|avoma|sembly|spinach|meetgeek/i.test(
-                    name
-                  );
+                  const isBot =
+                    /otter|fireflies|krisp|fathom|notetaker|tl;?dv|granola|read\.?ai|fellow|avoma|sembly|spinach|meetgeek/i.test(
+                      name
+                    );
                   return (
                     <div
                       key={i}
@@ -738,13 +769,13 @@ export default function ZoomHomePage() {
                         color: isBot ? "var(--ink-700)" : "var(--ink-800)",
                       }}
                     >
-                      <span className="inline-flex items-center gap-2">
+                      <span className="inline-flex items-center gap-2 truncate">
                         <Icon
                           name={isBot ? "bot" : "users"}
                           size={11}
                           color={isBot ? "var(--sage-plum)" : "var(--ink-500)"}
                         />
-                        {name}
+                        <span className="truncate">{name}</span>
                       </span>
                       {isBot && (
                         <span
@@ -752,6 +783,8 @@ export default function ZoomHomePage() {
                             fontSize: 10,
                             color: "var(--sage-plum)",
                             fontWeight: 500,
+                            flexShrink: 0,
+                            marginLeft: 6,
                           }}
                         >
                           bot
@@ -763,25 +796,12 @@ export default function ZoomHomePage() {
               )}
             </div>
           </>
-        )}
-
-        {!inMeeting && status.kind !== "loading" && (
-          <div
-            className="glass-card mb-4"
-            style={{ padding: 16, fontSize: 12, color: "var(--ink-600)" }}
-          >
-            {status.kind === "outside_zoom"
-              ? "Open NoteBouncer from Zoom's Apps panel during a meeting."
-              : status.kind === "main_client"
-                ? "Connected. Open during a meeting to enable bot removal."
-                : status.kind === "error"
-                  ? `Error: ${status.message}`
-                  : null}
-          </div>
+        ) : (
+          <NonMeetingState status={status} />
         )}
 
         {/* Activity log */}
-        <div className="tiny-label">Activity log</div>
+        <div className="tiny-label">{COPY.sidebarActivityHeader}</div>
         <div className="mt-1.5">
           <ActivityLog entries={logs} />
         </div>
@@ -792,18 +812,92 @@ export default function ZoomHomePage() {
 
 function StatusBadge({ status }: { status: Status }) {
   if (status.kind === "in_meeting") {
-    return <StatusPill tone="emerald">Watching</StatusPill>;
+    return <StatusPill tone="emerald">{COPY.sidebarWatching}</StatusPill>;
   }
   if (status.kind === "loading") {
-    return <StatusPill tone="slate">Connecting…</StatusPill>;
+    return <StatusPill tone="slate">{COPY.sidebarConnecting}</StatusPill>;
   }
   if (status.kind === "main_client") {
-    return <StatusPill tone="indigo">Idle</StatusPill>;
+    return <StatusPill tone="indigo">{COPY.sidebarIdle}</StatusPill>;
   }
   if (status.kind === "outside_zoom") {
-    return <StatusPill tone="amber">Outside Zoom</StatusPill>;
+    return <StatusPill tone="amber">{COPY.sidebarOutsideZoom}</StatusPill>;
   }
-  return <StatusPill tone="rose">Error</StatusPill>;
+  return <StatusPill tone="rose">{COPY.sidebarError}</StatusPill>;
+}
+
+function NonMeetingState({ status }: { status: Status }) {
+  if (status.kind === "loading") return null;
+  let text = "";
+  let tone: "outside" | "main" | "error" = "main";
+  if (status.kind === "outside_zoom") {
+    text = COPY.sidebarEmptyOutside;
+    tone = "outside";
+  } else if (status.kind === "main_client") {
+    text = COPY.sidebarEmptyMainClient;
+    tone = "main";
+  } else if (status.kind === "error") {
+    text = humanizeError(status.message);
+    tone = "error";
+  }
+  return (
+    <div
+      className="glass-card mb-4 text-center"
+      style={{ padding: 24, fontSize: 13, color: "var(--ink-600)" }}
+    >
+      <div
+        className="mx-auto mb-3 rounded-xl flex items-center justify-center"
+        style={{
+          width: 44,
+          height: 44,
+          background:
+            tone === "error" ? "var(--rose-100)" : "var(--sage-plum-50)",
+          color: tone === "error" ? "#9F1239" : "var(--sage-plum)",
+        }}
+      >
+        <Icon
+          name={tone === "error" ? "x" : "shield-check"}
+          size={22}
+          color={tone === "error" ? "#9F1239" : "var(--sage-plum)"}
+        />
+      </div>
+      <div style={{ lineHeight: 1.5 }}>{text}</div>
+    </div>
+  );
+}
+
+function SidebarEmpty() {
+  return (
+    <div className="text-center py-6 px-2">
+      <div
+        className="mx-auto mb-3 rounded-2xl flex items-center justify-center"
+        style={{
+          width: 44,
+          height: 44,
+          background: "var(--sage-plum-50)",
+          color: "var(--sage-plum)",
+        }}
+      >
+        <Icon
+          name="shield-check"
+          size={22}
+          color="var(--sage-plum)"
+          stroke={1.5}
+        />
+      </div>
+      <div
+        style={{
+          fontSize: 12.5,
+          color: "var(--ink-600)",
+          lineHeight: 1.5,
+          maxWidth: 260,
+          margin: "0 auto",
+        }}
+      >
+        {COPY.sidebarEmptyWatching}
+      </div>
+    </div>
+  );
 }
 
 function ToggleButton({
@@ -880,7 +974,7 @@ function BotCard({
 
   return (
     <div
-      className="relative overflow-hidden"
+      className="relative overflow-hidden transition-colors"
       style={{
         background: palette.bg,
         border: `1px solid ${palette.border}`,
@@ -916,9 +1010,10 @@ function BotCard({
           {bot.errorMessage && (
             <div
               className="mt-1"
-              style={{ fontSize: 11, color: "#9F1239" }}
+              style={{ fontSize: 11, color: "#9F1239", lineHeight: 1.4 }}
+              title={bot.errorMessage}
             >
-              {bot.errorMessage}
+              {humanizeError(bot.errorMessage)}
             </div>
           )}
         </div>
@@ -950,12 +1045,13 @@ function BotCard({
           <button
             onClick={onAct}
             disabled={disabled}
-            className="rounded-full text-white border-none cursor-pointer whitespace-nowrap"
+            className="rounded-full text-white border-none whitespace-nowrap"
             style={{
               fontSize: 11,
               fontWeight: 500,
               padding: "5px 12px",
               background: "var(--ink-900)",
+              cursor: disabled ? "not-allowed" : "pointer",
               opacity: disabled ? 0.5 : 1,
             }}
           >
@@ -967,6 +1063,55 @@ function BotCard({
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+function ToastItem({ toast }: { toast: Toast }) {
+  const palette = {
+    success: {
+      bg: "var(--emerald-50)",
+      border: "var(--emerald-100)",
+      fg: "var(--emerald-600)",
+      icon: "check" as const,
+    },
+    info: {
+      bg: "var(--indigo-50)",
+      border: "var(--indigo-100)",
+      fg: "var(--indigo-600)",
+      icon: "dot" as const,
+    },
+    error: {
+      bg: "var(--rose-100)",
+      border: "#fecdd3",
+      fg: "#9F1239",
+      icon: "x" as const,
+    },
+  }[toast.tone];
+
+  return (
+    <div
+      className="rounded-xl flex items-center gap-2 pointer-events-auto animate-toast-in"
+      style={{
+        background: palette.bg,
+        border: `1px solid ${palette.border}`,
+        boxShadow: "var(--shadow-float)",
+        padding: "10px 14px",
+        color: palette.fg,
+        fontSize: 13,
+        fontWeight: 500,
+        lineHeight: 1.4,
+      }}
+    >
+      <Icon name={palette.icon} size={14} color={palette.fg} />
+      <span className="flex-1">{toast.text}</span>
+      <style>{`
+        @keyframes toast-in {
+          from { opacity: 0; transform: translateY(-8px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-toast-in { animation: toast-in 200ms cubic-bezier(0.16, 1, 0.3, 1); }
+      `}</style>
     </div>
   );
 }

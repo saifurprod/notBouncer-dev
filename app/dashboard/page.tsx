@@ -6,9 +6,15 @@ import {
   BrandMark,
   Avatar,
 } from "@/lib/ui/components";
-import { ActivityTable, ActivityRow } from "./activity-table";
+import { ActivityCard, ActivityRow } from "./activity-table";
 import { generateInsight } from "@/lib/insights";
-import { dedupIncidents, countByAction } from "@/lib/dedup";
+import {
+  dedupIncidents,
+  countByAction,
+  groupByMeeting,
+  type MeetingSummary,
+} from "@/lib/dedup";
+import { COPY } from "@/lib/copy";
 
 export const dynamic = "force-dynamic";
 
@@ -17,8 +23,6 @@ export default async function DashboardPage({
 }: {
   searchParams: { installed?: string };
 }) {
-  // Pull a wide window of raw audit rows so the dedup can group correctly.
-  // We then derive stats and the activity list from the deduped incidents.
   const [users, allLogs, last48hLogs] = await Promise.all([
     prisma.user.findMany({
       where: { deauthorizedAt: null },
@@ -26,17 +30,16 @@ export default async function DashboardPage({
     }),
     prisma.auditLog.findMany({
       orderBy: { createdAt: "desc" },
-      take: 1000, // wide window for dedup + insights
+      take: 1000,
     }),
     prisma.auditLog.findMany({
       where: { createdAt: { gte: new Date(Date.now() - 48 * 60 * 60 * 1000) } },
     }),
   ]);
 
-  // Dedup all rows into one incident per (meeting, bot)
   const allIncidents = dedupIncidents(allLogs);
+  const meetingSummaries = groupByMeeting(allIncidents);
 
-  // Stats — totals are over all incidents we have; "this week" is over the last 7 days
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
   const weekIncidents = allIncidents.filter(
     (i) => i.earliestAt >= sevenDaysAgo
@@ -52,12 +55,8 @@ export default async function DashboardPage({
 
   const total = countByAction(allIncidents);
   const week = countByAction(weekIncidents);
-
-  // Last-48h is a separate count (raw rows are fine here since it's just
-  // "did anything happen at all in the last 2 days")
   const last48hCount = last48hLogs.length;
 
-  // AI insight runs on raw rows so its vendor counting works
   const insight = generateInsight(
     allLogs.map((l) => ({
       participantName: l.participantName,
@@ -70,19 +69,22 @@ export default async function DashboardPage({
     }))
   );
 
-  const heroStat = `${monthIncidents.length} bot${monthIncidents.length === 1 ? "" : "s"} stopped this month.`;
+  const heroNum = monthIncidents.length;
+  const heroStat = `${heroNum} ${
+    heroNum === 1 ? COPY.dashHeroSuffix : COPY.dashHeroSuffixPlural
+  }`;
   const heroSub =
     last48hCount === 0
-      ? "No notetaker has crashed your meetings unannounced in the last 48 hours."
-      : `${monthIncidents.length} bot incident${monthIncidents.length === 1 ? "" : "s"} caught this month across your meetings.`;
+      ? COPY.dashHeroQuietSub
+      : `${heroNum} bot incident${heroNum === 1 ? "" : "s"} caught this month.`;
 
   const primaryHost = users[0];
   const hostFirstName = primaryHost?.displayName?.split(" ")[0] ?? "Host";
 
-  // Convert deduped incidents to activity rows for the client component.
-  // Keep raw ISO timestamp; client component formats it in the user's tz.
-  const rows: ActivityRow[] = allIncidents.slice(0, 100).map((i) => ({
+  // Convert deduped incidents to rows for the activity card
+  const rows: ActivityRow[] = allIncidents.slice(0, 200).map((i) => ({
     id: i.id,
+    meetingId: i.meetingId,
     whenISO: i.earliestAt.toISOString(),
     name: i.participantName,
     email: i.participantEmail,
@@ -92,9 +94,28 @@ export default async function DashboardPage({
     error: i.errorMessage,
   }));
 
+  // Serializable meeting summary for the client component
+  const meetingsForClient = meetingSummaries.slice(0, 100).map((m) => ({
+    meetingId: m.meetingId,
+    earliestISO: m.earliestAt.toISOString(),
+    latestISO: m.latestAt.toISOString(),
+    counts: m.counts,
+    incidents: m.incidents.map((i) => ({
+      id: i.id,
+      whenISO: i.earliestAt.toISOString(),
+      name: i.participantName,
+      reason: i.matchReason,
+      action: i.action,
+      latency: i.latencyMs,
+    })),
+  }));
+
   return (
-    <main className="min-h-screen" style={{ background: "var(--canvas-lavender)" }}>
-      <div className="max-w-[1280px] mx-auto px-14 pt-12 pb-24">
+    <main
+      className="min-h-screen"
+      style={{ background: "var(--canvas-lavender)" }}
+    >
+      <div className="max-w-[1280px] mx-auto px-6 sm:px-10 lg:px-14 pt-8 sm:pt-12 pb-24">
         <NBHeader
           breadcrumb="Activity"
           stat={heroStat}
@@ -113,14 +134,11 @@ export default async function DashboardPage({
             }}
           >
             <Icon name="check" size={18} />
-            <div style={{ fontSize: 13 }}>
-              Installed successfully. Open NoteBouncer from Zoom's Apps panel
-              during your next meeting to enable auto-removal.
-            </div>
+            <div style={{ fontSize: 13 }}>{COPY.installSuccess}</div>
           </div>
         )}
 
-        <div className="flex flex-col gap-10 mt-10">
+        <div className="flex flex-col gap-8 sm:gap-10 mt-8 sm:mt-10">
           {insight && <InsightCard insight={insight} />}
 
           <div>
@@ -128,16 +146,21 @@ export default async function DashboardPage({
             <StatsCard total={total} week={week} />
           </div>
 
-          {users.length > 0 && (
+          {users.length > 0 ? (
             <div>
               <SectionLabel>Operations</SectionLabel>
               <HostsCard users={users} />
+            </div>
+          ) : (
+            <div>
+              <SectionLabel>Operations</SectionLabel>
+              <EmptyHostsCard />
             </div>
           )}
 
           <div>
             <SectionLabel>Activity log</SectionLabel>
-            <ActivityTable rows={rows} />
+            <ActivityCard rows={rows} meetings={meetingsForClient} />
           </div>
         </div>
       </div>
@@ -167,15 +190,15 @@ function NBHeader({
       </div>
 
       <div className="flex items-start justify-between gap-8 flex-wrap">
-        <div className="flex items-start gap-5">
-          <div style={{ marginTop: 22 }}>
-            <BrandMark size={48} iconSize={22} />
+        <div className="flex items-start gap-4 sm:gap-5 min-w-0 flex-1">
+          <div className="mt-4 sm:mt-[22px] shrink-0">
+            <BrandMark size={40} iconSize={20} />
           </div>
-          <div>
+          <div className="min-w-0">
             <div
               className="mb-2"
               style={{
-                fontSize: 16,
+                fontSize: 14,
                 fontWeight: 500,
                 letterSpacing: "0.044em",
                 color: "rgb(100,96,94)",
@@ -184,10 +207,9 @@ function NBHeader({
               {hostName}'s Bouncer Control
             </div>
             <h1
-              className="m-0 font-light"
+              className="m-0 font-light text-3xl sm:text-4xl md:text-5xl"
               style={{
-                fontSize: 48,
-                lineHeight: 0.85,
+                lineHeight: 0.9,
                 letterSpacing: "-0.02em",
                 color: "var(--ink-900)",
                 maxWidth: 720,
@@ -208,7 +230,7 @@ function NBHeader({
           </div>
         </div>
 
-        <div className="flex flex-col items-end gap-5">
+        <div className="hidden md:flex flex-col items-end gap-5 shrink-0">
           <div
             style={{
               color: "var(--sage-plum)",
@@ -238,8 +260,8 @@ function InsightCard({
 }) {
   return (
     <div
-      className="glass-card flex items-start gap-[18px]"
-      style={{ padding: 24 }}
+      className="glass-card flex items-start gap-4 sm:gap-[18px]"
+      style={{ padding: 20 }}
     >
       <div
         className="rounded-xl flex-shrink-0"
@@ -292,28 +314,28 @@ function StatsCard({
 }) {
   const stats = [
     {
-      label: "Detected",
+      label: COPY.statDetected,
       tone: "slate" as const,
       value: total.total,
       delta: `${signed(week.total)} this week`,
       icon: "bot" as const,
     },
     {
-      label: "Removed",
+      label: COPY.statRemoved,
       tone: "emerald" as const,
       value: total.removed,
       delta: `${signed(week.removed)} this week`,
       icon: "trash" as const,
     },
     {
-      label: "Waiting",
+      label: COPY.statWaiting,
       tone: "indigo" as const,
       value: total.waiting,
       delta: `${signed(week.waiting)} this week`,
       icon: "door-open" as const,
     },
     {
-      label: "Failed",
+      label: COPY.statFailed,
       tone: "rose" as const,
       value: total.failed,
       delta: `${signed(week.failed)} this week`,
@@ -322,24 +344,21 @@ function StatsCard({
   ];
 
   return (
-    <div className="glass-card" style={{ padding: 28 }}>
-      <div className="flex justify-between items-start mb-1.5">
+    <div className="glass-card" style={{ padding: 24 }}>
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-2 sm:gap-0 mb-1.5">
         <div>
           <div
             className="font-bold"
             style={{ fontSize: 18, color: "var(--ink-900)" }}
           >
-            Bot Lifecycle Intelligence
+            {COPY.statsTitle}
           </div>
-          <div
-            className="mt-1"
-            style={{ fontSize: 13, color: "var(--ink-600)" }}
-          >
-            Detection + removal activity across all your hosts · last 7 days
+          <div className="mt-1" style={{ fontSize: 13, color: "var(--ink-600)" }}>
+            {COPY.statsSubtitle}
           </div>
         </div>
       </div>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-5">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4 mt-5">
         {stats.map((s) => {
           const p = STAT_TONES[s.tone];
           return (
@@ -347,11 +366,11 @@ function StatsCard({
               key={s.label}
               className="rounded-xl flex flex-col justify-between"
               style={{
-                padding: 20,
+                padding: 18,
                 background: "rgba(255,255,255,0.7)",
                 border: "1px solid rgba(255,255,255,0.6)",
                 boxShadow: "var(--shadow-xs)",
-                minHeight: 140,
+                minHeight: 130,
               }}
             >
               <div className="flex justify-between items-center">
@@ -373,7 +392,7 @@ function StatsCard({
                 <div
                   className="font-light"
                   style={{
-                    fontSize: 42,
+                    fontSize: 36,
                     color: "var(--ink-900)",
                     lineHeight: 1,
                     letterSpacing: "-0.02em",
@@ -412,24 +431,19 @@ function HostsCard({
   }>;
 }) {
   return (
-    <div className="glass-card" style={{ padding: 28 }}>
-      <div className="flex justify-between items-center mb-1">
-        <div>
-          <div
-            className="font-bold"
-            style={{ fontSize: 18, color: "var(--ink-900)" }}
-          >
-            Connected hosts
-          </div>
-          <div
-            className="mt-1"
-            style={{ fontSize: 13, color: "var(--ink-600)" }}
-          >
-            Zoom accounts authorised to NoteBouncer
-          </div>
+    <div className="glass-card" style={{ padding: 24 }}>
+      <div className="mb-4">
+        <div
+          className="font-bold"
+          style={{ fontSize: 18, color: "var(--ink-900)" }}
+        >
+          {COPY.hostsTitle}
+        </div>
+        <div className="mt-1" style={{ fontSize: 13, color: "var(--ink-600)" }}>
+          {COPY.hostsSubtitle}
         </div>
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 mt-5">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-3.5">
         {users.map((u) => (
           <div
             key={u.email}
@@ -438,7 +452,7 @@ function HostsCard({
           >
             <Avatar name={u.displayName ?? u.email} size={36} />
             <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <span
                   className="font-medium truncate"
                   style={{ fontSize: 14, color: "var(--ink-900)" }}
@@ -455,13 +469,40 @@ function HostsCard({
               </div>
             </div>
             <div
-              className="text-right"
+              className="text-right hidden sm:block"
               style={{ fontSize: 11, color: "var(--ink-500)" }}
             >
               <div>since {u.installedAt.toISOString().slice(0, 10)}</div>
             </div>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+function EmptyHostsCard() {
+  return (
+    <div className="glass-card text-center" style={{ padding: 36 }}>
+      <div
+        className="mx-auto mb-3 rounded-xl flex items-center justify-center"
+        style={{
+          width: 44,
+          height: 44,
+          background: "var(--sage-plum-50)",
+          color: "var(--sage-plum)",
+        }}
+      >
+        <Icon name="users" size={22} color="var(--sage-plum)" />
+      </div>
+      <div
+        className="font-semibold mb-1"
+        style={{ fontSize: 15, color: "var(--ink-900)" }}
+      >
+        {COPY.emptyHosts.title}
+      </div>
+      <div style={{ fontSize: 13, color: "var(--ink-600)" }}>
+        {COPY.emptyHosts.body}
       </div>
     </div>
   );
