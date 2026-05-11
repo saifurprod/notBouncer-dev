@@ -41,6 +41,24 @@ type Toast = {
   expiresAt: number;
 };
 
+type BlocklistEntry = {
+  /** Stable ID for React keys and removal targeting. */
+  id: string;
+  /** Normalized display name. Empty string if unknown. */
+  name: string;
+  /** Original casing for display. */
+  displayName: string;
+  /** Domain extracted from the email at remove time. Null if no email. */
+  domain: string | null;
+  /** Original email (display). Null if no email at remove time. */
+  email: string | null;
+  /** ms epoch of when this entry was added. Used for newest-first sort. */
+  addedAt: number;
+  /** ms epoch of the most recent auto-kick triggered by this entry.
+   *  Used for the 5s "just kicked" row highlight. */
+  lastKickedAt: number | null;
+};
+
 export default function ZoomSidebarApp() {
   const [status, setStatus] = useState<Status>({ kind: "loading" });
   const [participants, setParticipants] = useState<any[]>([]);
@@ -58,16 +76,30 @@ export default function ZoomSidebarApp() {
   const meetingTopicRef = useRef<string>("");
   const meetingStartRef = useRef<number>(Date.now());
   const detectedUUIDsRef = useRef<Set<string>>(new Set());
-  const blocklistRef = useRef<{ names: Set<string>; domains: Set<string> }>({
-    names: new Set(),
-    domains: new Set(),
-  });
+  // Blocklist entries — each represents one person who was removed. The
+  // sidebar's auto-kick logic checks incoming participants against the name
+  // and domain of every entry. State (not ref) so the UI can render and the
+  // host can manage entries.
+  const [blocklist, setBlocklist] = useState<BlocklistEntry[]>([]);
+  // We mirror the latest blocklist in a ref so synchronous lookups
+  // (isBlocklisted called during participant-join event handlers) see the
+  // current state without depending on closure capture.
+  const blocklistRef = useRef<BlocklistEntry[]>([]);
+  useEffect(() => {
+    blocklistRef.current = blocklist;
+  }, [blocklist]);
   const toastIdRef = useRef(0);
   // Queue of bot names detected mid-meeting, waiting to be coalesced into
   // a single Zoom system notification. Pattern: every new bot resets a
   // 2-second timer; when the timer fires, we send one summary notification.
   const pendingBotNamesRef = useRef<string[]>([]);
   const notifyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Whether the activity log section is visible. Default: hidden — it's
+  // developer-flavored output (raw event lines, latency numbers). Hosts
+  // running real meetings shouldn't see this by default. Toggle exposed at
+  // the bottom of the sidebar.
+  const [showActivityLog, setShowActivityLog] = useState(false);
 
   function normalizeName(name: string): string {
     return name
@@ -79,17 +111,62 @@ export default function ZoomSidebarApp() {
 
   function isBlocklisted(name: string, email: string | null): boolean {
     const norm = normalizeName(name);
-    if (norm && blocklistRef.current.names.has(norm)) return true;
-    const domain = email?.toLowerCase().split("@")[1];
-    if (domain && blocklistRef.current.domains.has(domain)) return true;
+    const domain = email?.toLowerCase().split("@")[1] ?? null;
+    for (const entry of blocklistRef.current) {
+      if (norm && entry.name && entry.name === norm) return true;
+      if (domain && entry.domain && entry.domain === domain) return true;
+    }
     return false;
   }
 
   function addToBlocklist(name: string, email: string | null) {
     const norm = normalizeName(name);
-    if (norm) blocklistRef.current.names.add(norm);
-    const domain = email?.toLowerCase().split("@")[1];
-    if (domain) blocklistRef.current.domains.add(domain);
+    const domain = email?.toLowerCase().split("@")[1] ?? null;
+    // Don't add a duplicate if an identical entry already exists.
+    const exists = blocklistRef.current.some(
+      (e) => e.name === norm && e.domain === domain,
+    );
+    if (exists) return;
+    const entry: BlocklistEntry = {
+      id: `bl-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      name: norm,
+      displayName: name.trim() || norm || "(no name)",
+      domain,
+      email,
+      addedAt: Date.now(),
+      lastKickedAt: null,
+    };
+    setBlocklist((prev) => [entry, ...prev]);
+  }
+
+  function removeFromBlocklist(id: string) {
+    setBlocklist((prev) => prev.filter((e) => e.id !== id));
+  }
+
+  function markEntryKicked(name: string, email: string | null) {
+    const norm = normalizeName(name);
+    const domain = email?.toLowerCase().split("@")[1] ?? null;
+    setBlocklist((prev) =>
+      prev.map((e) => {
+        const nameMatch = !!norm && !!e.name && e.name === norm;
+        const domainMatch = !!domain && !!e.domain && e.domain === domain;
+        return nameMatch || domainMatch
+          ? { ...e, lastKickedAt: Date.now() }
+          : e;
+      }),
+    );
+    // Trigger a re-render after the highlight window so the "just kicked"
+    // tag fades. We use a small grace buffer (200ms) past the 5s window
+    // so the row truly looks settled when the highlight is removed.
+    setTimeout(() => {
+      setBlocklist((prev) =>
+        prev.map((e) => {
+          if (!e.lastKickedAt) return e;
+          if (Date.now() - e.lastKickedAt < 5000) return e;
+          return { ...e, lastKickedAt: null };
+        }),
+      );
+    }, 5200);
   }
 
   function appendLog(level: LogEntry["level"], text: string) {
@@ -199,6 +276,9 @@ export default function ZoomSidebarApp() {
     if (!uuid) return;
 
     appendLog("warn", `Auto-kicking blocklisted rejoin: ${name}`);
+    // Mark the matching blocklist entry so the Blocked UI shows a brief
+    // "just kicked" amber highlight (visible for 5 seconds).
+    markEntryKicked(name, email);
     const startedAt = Date.now();
     try {
       await sdk.removeParticipant({ participantUUID: uuid });
@@ -888,11 +968,40 @@ export default function ZoomSidebarApp() {
           <NonMeetingState status={status} />
         )}
 
-        {/* Activity log */}
-        <div className="tiny-label">{COPY.sidebarActivityHeader}</div>
-        <div className="mt-1.5">
-          <ActivityLog entries={logs} />
+        {/* Blocked participants — always visible, primary section
+            after Caught bots. The host can review who's locked out
+            of the meeting and click × to unblock anyone. */}
+        <div className="tiny-label mt-6">Blocked</div>
+        <div className="mt-1.5 mb-6">
+          <BlockedList
+            entries={blocklist}
+            onRemove={removeFromBlocklist}
+          />
         </div>
+
+        {/* Activity log — developer-flavored event stream. Hidden by
+            default; the toggle below opens it when needed for debugging. */}
+        <button
+          type="button"
+          onClick={() => setShowActivityLog((v) => !v)}
+          className="text-[11px] font-medium"
+          style={{
+            color: "var(--ink-500)",
+            background: "transparent",
+            border: 0,
+            padding: "4px 0",
+            cursor: "pointer",
+            letterSpacing: "0.04em",
+          }}
+          aria-expanded={showActivityLog}
+        >
+          {showActivityLog ? "Hide activity log" : "Show activity log"}
+        </button>
+        {showActivityLog && (
+          <div className="mt-2">
+            <ActivityLog entries={logs} />
+          </div>
+        )}
       </div>
     </main>
   );
@@ -1184,6 +1293,157 @@ function ToastItem({ toast }: { toast: Toast }) {
         }
         .animate-toast-in { animation: toast-in 200ms cubic-bezier(0.16, 1, 0.3, 1); }
       `}</style>
+    </div>
+  );
+}
+
+function BlockedList({
+  entries,
+  onRemove,
+}: {
+  entries: BlocklistEntry[];
+  onRemove: (id: string) => void;
+}) {
+  // Empty state — explicit so the host knows the feature exists and
+  // where blocked people will appear.
+  if (entries.length === 0) {
+    return (
+      <div
+        className="glass-card"
+        style={{ padding: "16px 14px" }}
+      >
+        <div
+          style={{
+            fontSize: 12,
+            fontWeight: 500,
+            color: "var(--ink-700)",
+          }}
+        >
+          No blocked participants yet
+        </div>
+        <div
+          className="mt-1"
+          style={{
+            fontSize: 11,
+            color: "var(--ink-500)",
+            lineHeight: 1.5,
+          }}
+        >
+          Removed bots appear here. Click × to unblock.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="glass-card" style={{ padding: 6 }}>
+      {entries.map((entry) => (
+        <BlockedEntryRow
+          key={entry.id}
+          entry={entry}
+          onRemove={() => onRemove(entry.id)}
+        />
+      ))}
+    </div>
+  );
+}
+
+function BlockedEntryRow({
+  entry,
+  onRemove,
+}: {
+  entry: BlocklistEntry;
+  onRemove: () => void;
+}) {
+  // "Just kicked" highlight — amber for 5 seconds after a matching
+  // auto-kick. We check the timestamp inline so adjacent rows update
+  // independently and no global re-render hook is needed.
+  const isJustKicked =
+    entry.lastKickedAt !== null && Date.now() - entry.lastKickedAt < 5000;
+
+  const subtitle = entry.domain
+    ? `· ${entry.domain}`
+    : entry.email
+    ? `· ${entry.email}`
+    : null;
+
+  return (
+    <div
+      className="flex items-center justify-between rounded-lg"
+      style={{
+        padding: "8px 10px 8px 12px",
+        background: isJustKicked ? "var(--amber-50)" : "transparent",
+        borderLeft: isJustKicked
+          ? "3px solid var(--amber-500)"
+          : "3px solid transparent",
+        transition: "background-color 200ms ease, border-color 200ms ease",
+      }}
+    >
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1.5">
+          <span
+            style={{
+              fontSize: 12,
+              fontWeight: 500,
+              color: "var(--ink-900)",
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {entry.displayName}
+          </span>
+          {subtitle && (
+            <span
+              style={{
+                fontSize: 11,
+                color: "var(--ink-500)",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                minWidth: 0,
+              }}
+            >
+              {subtitle}
+            </span>
+          )}
+          {isJustKicked && (
+            <StatusPill tone="amber" showDot={false}>
+              Just kicked
+            </StatusPill>
+          )}
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={onRemove}
+        aria-label={`Unblock ${entry.displayName}`}
+        title="Unblock"
+        className="flex-shrink-0"
+        style={{
+          width: 24,
+          height: 24,
+          borderRadius: 6,
+          border: 0,
+          background: "transparent",
+          cursor: "pointer",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          color: "var(--ink-500)",
+          marginLeft: 8,
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.background = "var(--rose-100)";
+          e.currentTarget.style.color = "#9F1239";
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.background = "transparent";
+          e.currentTarget.style.color = "var(--ink-500)";
+        }}
+      >
+        <Icon name="x" size={14} color="currentColor" />
+      </button>
     </div>
   );
 }
