@@ -317,6 +317,11 @@ export default function ZoomSidebarApp() {
           action: "removed",
           latencyMs,
         });
+        // Clear from the dedup set. If this bot rejoins later (typically with
+        // a new UUID anyway), we want detectParticipant to log it as a fresh
+        // detection rather than silently swallowing the event. The blocklist
+        // (added above) handles auto-kicking; logging still runs first.
+        detectedUUIDsRef.current.delete(bot.participantUUID);
       } else {
         await sdk.putParticipantToWaitingRoom({
           participantUUID: bot.participantUUID,
@@ -339,6 +344,12 @@ export default function ZoomSidebarApp() {
           action: "moved_to_waiting_room",
           latencyMs,
         });
+        // Clear from the dedup set. Zoom keeps the same UUID across the
+        // waiting-room cycle, so without this clear, an admit-back would be
+        // silently swallowed by the guard in detectParticipant. With the
+        // clear, admit-back fires a fresh `detected` event and the cycle
+        // counts on the dashboard reflect reality.
+        detectedUUIDsRef.current.delete(bot.participantUUID);
       }
     } catch (err: any) {
       const msg = err?.message ?? String(err);
