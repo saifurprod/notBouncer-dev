@@ -662,36 +662,58 @@ function MeetingList({
       {pageMeetings.map((m) => {
         const whenText = now ? formatTimestamp(m.latestISO, now) : "—";
         const idShort =
-          m.meetingId.length > 11
+          m.meetingId.length >= 5
             ? `${m.meetingId.slice(0, 4)}…${m.meetingId.slice(-4)}`
             : m.meetingId;
         return (
           <details
             key={m.meetingId}
-            className="rounded-xl group"
-            style={{
-              background: "rgba(255,255,255,0.7)",
-              border: "1px solid rgba(255,255,255,0.6)",
-            }}
+            className="meeting-block rounded-xl group"
           >
             <summary
-              className="cursor-pointer list-none px-4 py-3 sm:px-5 sm:py-4"
+              className="cursor-pointer list-none px-4 py-3.5 sm:px-5 sm:py-4"
               style={{ outline: "none" }}
             >
               <div className="flex justify-between items-start gap-3 flex-wrap">
-                <div className="min-w-0 flex-1">
-                  <div
-                    className="font-medium font-mono"
-                    style={{ fontSize: 12, color: "var(--ink-700)" }}
+                <div className="flex items-start gap-3 min-w-0 flex-1">
+                  <span
+                    className="meeting-chev shrink-0 inline-flex items-center justify-center"
+                    style={{
+                      width: 16,
+                      height: 16,
+                      marginTop: 2,
+                      color: "var(--ink-600)",
+                      transition: "transform 200ms ease, color 200ms ease",
+                    }}
+                    aria-hidden="true"
                   >
-                    Meeting {idShort}
-                  </div>
-                  <div
-                    className="mt-0.5"
-                    style={{ fontSize: 12, color: "var(--ink-500)" }}
-                  >
-                    {whenText} · {m.counts.total} bot
-                    {m.counts.total === 1 ? "" : "s"} caught
+                    <svg
+                      width="12"
+                      height="12"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <polyline points="9 18 15 12 9 6" />
+                    </svg>
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div
+                      className="font-medium font-mono"
+                      style={{ fontSize: 12, color: "var(--ink-700)" }}
+                    >
+                      Meeting {idShort}
+                    </div>
+                    <div
+                      className="mt-0.5"
+                      style={{ fontSize: 12, color: "var(--ink-500)" }}
+                    >
+                      {whenText} · {m.counts.total} bot
+                      {m.counts.total === 1 ? "" : "s"} caught
+                    </div>
                   </div>
                 </div>
                 <div className="flex gap-1.5 flex-wrap">
@@ -717,9 +739,9 @@ function MeetingList({
               </div>
             </summary>
             <div
+              className="meeting-incidents"
               style={{
-                borderTop: "1px solid var(--gray-100)",
-                padding: "12px 18px",
+                padding: "12px 18px 16px",
               }}
             >
               {m.incidents.map((inc, i) => {

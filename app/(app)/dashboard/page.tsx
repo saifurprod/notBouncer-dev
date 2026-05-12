@@ -132,60 +132,62 @@ export default async function HostDashboardPage({
           userEmail={primaryHost?.email}
         />
 
-        <div className="max-w-[1280px] w-full mx-auto px-6 sm:px-10 lg:px-14 pt-8 sm:pt-12 pb-24">
-          <section id="overview" className="scroll-mt-[84px]">
-            <NBHeader
-              stat={heroStat}
-              statSub={heroSub}
-              hostName={hostFirstName}
-            />
+        <div className="w-full px-6 sm:px-10 lg:px-12 xl:px-14 pt-8 sm:pt-12 pb-24 min-w-0">
+          <div className="max-w-[1280px]">
+            <section id="overview" className="scroll-mt-[84px]">
+              <NBHeader
+                stat={heroStat}
+                statSub={heroSub}
+                hostName={hostFirstName}
+              />
 
-            {searchParams.installed === "1" && (
-              <div
-                className="mt-8 rounded-2xl px-5 py-4 flex items-center gap-3"
-                style={{
-                  background: "var(--emerald-50)",
-                  border: "1px solid var(--emerald-100)",
-                  color: "var(--emerald-600)",
-                }}
-              >
-                <Icon name="check" size={18} />
-                <div style={{ fontSize: 13 }}>{COPY.installSuccess}</div>
-              </div>
-            )}
-          </section>
-
-          <div className="flex flex-col gap-8 sm:gap-10 mt-8 sm:mt-10">
-            <section id="connected-hosts" className="scroll-mt-[84px]">
-              <SectionLabel>Connected hosts</SectionLabel>
-              {users.length > 0 ? (
-                <HostsCard users={users} />
-              ) : (
-                <EmptyHostsCard />
+              {searchParams.installed === "1" && (
+                <div
+                  className="mt-8 rounded-2xl px-5 py-4 flex items-center gap-3"
+                  style={{
+                    background: "var(--emerald-50)",
+                    border: "1px solid var(--emerald-100)",
+                    color: "var(--emerald-600)",
+                  }}
+                >
+                  <Icon name="check" size={18} />
+                  <div style={{ fontSize: 13 }}>{COPY.installSuccess}</div>
+                </div>
               )}
             </section>
 
-            {insight && (
-              <section id="insight" className="scroll-mt-[84px]">
-                <SectionLabel>Insight</SectionLabel>
-                <InsightCard insight={insight} />
+            <div className="flex flex-col gap-8 sm:gap-10 mt-8 sm:mt-10">
+              <section id="connected-hosts" className="scroll-mt-[84px]">
+                <SectionLabel>Connected hosts</SectionLabel>
+                {users.length > 0 ? (
+                  <HostsCard users={users} />
+                ) : (
+                  <EmptyHostsCard />
+                )}
               </section>
-            )}
 
-            <section id="system-intelligence" className="scroll-mt-[84px]">
-              <SectionLabel>System intelligence</SectionLabel>
-              <StatsCard total={total} week={week} />
-            </section>
+              {insight && (
+                <section id="insight" className="scroll-mt-[84px]">
+                  <SectionLabel>Insight</SectionLabel>
+                  <InsightCard insight={insight} />
+                </section>
+              )}
 
-            <section id="activity-log" className="scroll-mt-[84px]">
-              <SectionLabel>Activity log</SectionLabel>
-              <ActivityCard rows={rows} meetings={meetingsForClient} />
-            </section>
+              <section id="system-intelligence" className="scroll-mt-[84px]">
+                <SectionLabel>System intelligence</SectionLabel>
+                <StatsCard total={total} week={week} />
+              </section>
 
-            <section id="rules" className="scroll-mt-[84px]">
-              <SectionLabel>Rules</SectionLabel>
-              <RulesPlaceholder />
-            </section>
+              <section id="activity-log" className="scroll-mt-[84px]">
+                <SectionLabel>Activity log</SectionLabel>
+                <ActivityCard rows={rows} meetings={meetingsForClient} />
+              </section>
+
+              <section id="rules" className="scroll-mt-[84px]">
+                <SectionLabel>Rules</SectionLabel>
+                <RulesPlaceholder />
+              </section>
+            </div>
           </div>
         </div>
       </div>
