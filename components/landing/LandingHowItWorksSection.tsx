@@ -35,7 +35,7 @@ export function LandingHowItWorksSection() {
   return (
     <section className="border-t border-stone-100/80 px-6 py-20 sm:px-8 sm:py-24 lg:py-24">
       <div className="mx-auto max-w-[1136px]">
-        <p className="mb-6 text-[11px] font-medium uppercase tracking-[0.08em] text-ink-500">
+        <p className="mb-6 text-[11px] font-medium uppercase tracking-[0.08em] text-plum-deep">
           How it works
         </p>
 

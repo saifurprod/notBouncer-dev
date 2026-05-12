@@ -29,7 +29,7 @@ export function LandingDetectsSection() {
   return (
     <section className="border-t border-stone-100/80 px-6 py-20 sm:px-8 sm:py-24 lg:py-24">
       <div className="mx-auto max-w-[1136px]">
-        <p className="mb-6 text-[11px] font-medium uppercase tracking-[0.08em] text-ink-500">
+        <p className="mb-6 text-[11px] font-medium uppercase tracking-[0.08em] text-plum-deep">
           What we detect
         </p>
         <h2 className="mb-6 max-w-[720px] text-[28px] font-light leading-[1.2] tracking-[-0.02em] text-ink-900 sm:text-[32px] lg:text-[36px] lg:leading-[1.15]">
