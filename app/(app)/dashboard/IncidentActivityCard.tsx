@@ -639,12 +639,27 @@ function MeetingList({
   meetings: MeetingForClient[];
   now: Date | null;
 }) {
+  const PAGE_SIZE = 10;
+  const [page, setPage] = useState(1);
+  const totalPages = Math.max(1, Math.ceil(meetings.length / PAGE_SIZE));
+  // Reset to page 1 if the underlying meetings array shrinks past the
+  // current page (e.g. on filter change in a future revision).
+  useEffect(() => {
+    if (page > totalPages) setPage(1);
+  }, [page, totalPages]);
+
   if (meetings.length === 0) {
     return <EmptyActivity firstRun={true} />;
   }
+
+  const startIdx = (page - 1) * PAGE_SIZE;
+  const endIdx = startIdx + PAGE_SIZE;
+  const pageMeetings = meetings.slice(startIdx, endIdx);
+  const showPagination = meetings.length > PAGE_SIZE;
+
   return (
     <div className="flex flex-col gap-3">
-      {meetings.map((m) => {
+      {pageMeetings.map((m) => {
         const whenText = now ? formatTimestamp(m.latestISO, now) : "—";
         const idShort =
           m.meetingId.length > 11
@@ -762,6 +777,183 @@ function MeetingList({
           </details>
         );
       })}
+      {showPagination && (
+        <MeetingPagination
+          page={page}
+          totalPages={totalPages}
+          startIdx={startIdx}
+          endIdx={Math.min(endIdx, meetings.length)}
+          total={meetings.length}
+          onPageChange={setPage}
+        />
+      )}
     </div>
   );
+}
+
+/**
+ * MeetingPagination — client-side pagination controls for the meeting list.
+ * Renders "Showing X–Y of N · prev / page numbers / next" below the meeting
+ * cards. Page numbers are condensed when there are many pages: shows first,
+ * last, current, and neighbors with ellipses between.
+ */
+function MeetingPagination({
+  page,
+  totalPages,
+  startIdx,
+  endIdx,
+  total,
+  onPageChange,
+}: {
+  page: number;
+  totalPages: number;
+  startIdx: number;
+  endIdx: number;
+  total: number;
+  onPageChange: (n: number) => void;
+}) {
+  return (
+    <div
+      className="flex items-center justify-between mt-2 pt-3 gap-3 flex-wrap"
+      style={{
+        borderTop: "1px solid rgba(168, 162, 158, 0.15)",
+      }}
+    >
+      <div style={{ fontSize: 11, color: "var(--ink-600)" }}>
+        Showing {startIdx + 1}–{endIdx} of {total} meeting
+        {total === 1 ? "" : "s"}
+      </div>
+      <div className="flex gap-1.5">
+        <PageButton
+          onClick={() => onPageChange(page - 1)}
+          disabled={page === 1}
+          aria-label="Previous page"
+        >
+          <svg
+            width="11"
+            height="11"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <polyline points="15 18 9 12 15 6" />
+          </svg>
+        </PageButton>
+        {pageNumbersToRender(page, totalPages).map((n, i) =>
+          n === "…" ? (
+            <span
+              key={`gap-${i}`}
+              className="inline-flex items-center justify-center"
+              style={{
+                width: 32,
+                height: 32,
+                color: "var(--ink-500)",
+                fontSize: 11,
+              }}
+              aria-hidden="true"
+            >
+              …
+            </span>
+          ) : (
+            <PageButton
+              key={n}
+              current={n === page}
+              onClick={() => onPageChange(n)}
+              aria-label={`Page ${n}`}
+              aria-current={n === page ? "page" : undefined}
+            >
+              {n}
+            </PageButton>
+          ),
+        )}
+        <PageButton
+          onClick={() => onPageChange(page + 1)}
+          disabled={page === totalPages}
+          aria-label="Next page"
+        >
+          <svg
+            width="11"
+            height="11"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <polyline points="9 18 15 12 9 6" />
+          </svg>
+        </PageButton>
+      </div>
+    </div>
+  );
+}
+
+function PageButton({
+  current,
+  disabled,
+  onClick,
+  children,
+  ...rest
+}: {
+  current?: boolean;
+  disabled?: boolean;
+  onClick?: () => void;
+  children: React.ReactNode;
+} & React.AriaAttributes & { "aria-label"?: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className="inline-flex items-center justify-center rounded-[7px] transition-colors"
+      style={{
+        width: 32,
+        height: 32,
+        border: current
+          ? "1px solid var(--sage-plum)"
+          : "1px solid rgba(168, 162, 158, 0.25)",
+        background: current ? "var(--sage-plum)" : "rgba(255, 255, 255, 0.5)",
+        color: current ? "white" : "var(--ink-700)",
+        fontSize: 11,
+        fontWeight: current ? 500 : 400,
+        cursor: disabled ? "default" : "pointer",
+        opacity: disabled ? 0.4 : 1,
+        fontFamily: "inherit",
+      }}
+      {...rest}
+    >
+      {children}
+    </button>
+  );
+}
+
+/**
+ * Returns the page numbers to render, with "…" inserted where pages are
+ * skipped. Always shows page 1, last page, current page, and 1 neighbor
+ * on each side of current.
+ *
+ * Examples:
+ *   pageNumbersToRender(1, 1)  → [1]
+ *   pageNumbersToRender(3, 5)  → [1, 2, 3, 4, 5]
+ *   pageNumbersToRender(5, 20) → [1, "…", 4, 5, 6, "…", 20]
+ */
+function pageNumbersToRender(
+  page: number,
+  totalPages: number,
+): Array<number | "…"> {
+  if (totalPages <= 7) {
+    return Array.from({ length: totalPages }, (_, i) => i + 1);
+  }
+  const out: Array<number | "…"> = [1];
+  const left = Math.max(2, page - 1);
+  const right = Math.min(totalPages - 1, page + 1);
+  if (left > 2) out.push("…");
+  for (let i = left; i <= right; i++) out.push(i);
+  if (right < totalPages - 1) out.push("…");
+  out.push(totalPages);
+  return out;
 }

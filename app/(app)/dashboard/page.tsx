@@ -5,6 +5,8 @@ import { SectionLabel } from "@/components/ui/SectionLabel";
 import { BrandMark } from "@/components/ui/BrandMark";
 import { Avatar } from "@/components/ui/Avatar";
 import { ActivityCard, ActivityRow } from "./IncidentActivityCard";
+import { DashboardTopbar } from "./DashboardTopbar";
+import { DashboardSidebar } from "./DashboardSidebar";
 import { generateInsight } from "@/lib/domain/insights";
 import {
   dedupIncidents,
@@ -122,52 +124,68 @@ export default async function HostDashboardPage({
       className="min-h-screen"
       style={{ background: "var(--canvas-sand)" }}
     >
-      <div className="max-w-[1280px] mx-auto px-6 sm:px-10 lg:px-14 pt-8 sm:pt-12 pb-24">
-        <NBHeader
-          breadcrumb="Activity"
-          stat={heroStat}
-          statSub={heroSub}
-          hostName={hostFirstName}
-          fullHostName={primaryHost?.displayName ?? "—"}
+      <DashboardTopbar userName={primaryHost?.displayName ?? "—"} />
+
+      <div className="lg:grid lg:grid-cols-[72px_1fr]">
+        <DashboardSidebar
+          userName={primaryHost?.displayName ?? "—"}
+          userEmail={primaryHost?.email}
         />
 
-        {searchParams.installed === "1" && (
-          <div
-            className="mt-8 rounded-2xl px-5 py-4 flex items-center gap-3"
-            style={{
-              background: "var(--emerald-50)",
-              border: "1px solid var(--emerald-100)",
-              color: "var(--emerald-600)",
-            }}
-          >
-            <Icon name="check" size={18} />
-            <div style={{ fontSize: 13 }}>{COPY.installSuccess}</div>
-          </div>
-        )}
+        <div className="max-w-[1280px] w-full mx-auto px-6 sm:px-10 lg:px-14 pt-8 sm:pt-12 pb-24">
+          <section id="overview" className="scroll-mt-[84px]">
+            <NBHeader
+              stat={heroStat}
+              statSub={heroSub}
+              hostName={hostFirstName}
+            />
 
-        <div className="flex flex-col gap-8 sm:gap-10 mt-8 sm:mt-10">
-          {insight && <InsightCard insight={insight} />}
+            {searchParams.installed === "1" && (
+              <div
+                className="mt-8 rounded-2xl px-5 py-4 flex items-center gap-3"
+                style={{
+                  background: "var(--emerald-50)",
+                  border: "1px solid var(--emerald-100)",
+                  color: "var(--emerald-600)",
+                }}
+              >
+                <Icon name="check" size={18} />
+                <div style={{ fontSize: 13 }}>{COPY.installSuccess}</div>
+              </div>
+            )}
+          </section>
 
-          <div>
-            <SectionLabel>System intelligence</SectionLabel>
-            <StatsCard total={total} week={week} />
-          </div>
+          <div className="flex flex-col gap-8 sm:gap-10 mt-8 sm:mt-10">
+            <section id="connected-hosts" className="scroll-mt-[84px]">
+              <SectionLabel>Connected hosts</SectionLabel>
+              {users.length > 0 ? (
+                <HostsCard users={users} />
+              ) : (
+                <EmptyHostsCard />
+              )}
+            </section>
 
-          {users.length > 0 ? (
-            <div>
-              <SectionLabel>Operations</SectionLabel>
-              <HostsCard users={users} />
-            </div>
-          ) : (
-            <div>
-              <SectionLabel>Operations</SectionLabel>
-              <EmptyHostsCard />
-            </div>
-          )}
+            {insight && (
+              <section id="insight" className="scroll-mt-[84px]">
+                <SectionLabel>Insight</SectionLabel>
+                <InsightCard insight={insight} />
+              </section>
+            )}
 
-          <div>
-            <SectionLabel>Activity log</SectionLabel>
-            <ActivityCard rows={rows} meetings={meetingsForClient} />
+            <section id="system-intelligence" className="scroll-mt-[84px]">
+              <SectionLabel>System intelligence</SectionLabel>
+              <StatsCard total={total} week={week} />
+            </section>
+
+            <section id="activity-log" className="scroll-mt-[84px]">
+              <SectionLabel>Activity log</SectionLabel>
+              <ActivityCard rows={rows} meetings={meetingsForClient} />
+            </section>
+
+            <section id="rules" className="scroll-mt-[84px]">
+              <SectionLabel>Rules</SectionLabel>
+              <RulesPlaceholder />
+            </section>
           </div>
         </div>
       </div>
@@ -176,83 +194,63 @@ export default async function HostDashboardPage({
 }
 
 function NBHeader({
-  breadcrumb,
   stat,
   statSub,
   hostName,
-  fullHostName,
 }: {
-  breadcrumb: string;
   stat: string;
   statSub: string;
   hostName: string;
-  fullHostName: string;
 }) {
   return (
     <div>
-      <div className="mb-6" style={{ fontSize: 12, color: "var(--ink-500)" }}>
-        <span style={{ color: "rgb(107,101,127)" }}>Home</span>
-        <span style={{ color: "rgb(154,149,186)", margin: "0 8px" }}>›</span>
-        <span style={{ color: "#000", fontWeight: 500 }}>{breadcrumb}</span>
+      <div
+        className="mb-6"
+        style={{
+          fontSize: 12,
+          color: "var(--ink-900)",
+          fontWeight: 500,
+        }}
+      >
+        Dashboard
       </div>
 
-      <div className="flex items-start justify-between gap-8 flex-wrap">
-        <div className="flex items-start gap-4 sm:gap-5 min-w-0 flex-1">
-          <div className="mt-4 sm:mt-[22px] shrink-0">
-            <BrandMark size={40} iconSize={20} />
-          </div>
-          <div className="min-w-0">
-            <div
-              className="mb-2"
-              style={{
-                fontSize: 14,
-                fontWeight: 500,
-                letterSpacing: "0.044em",
-                color: "rgb(100,96,94)",
-              }}
-            >
-              {hostName}'s Bouncer Control
-            </div>
-            <h1
-              className="m-0 font-light text-3xl sm:text-4xl md:text-5xl"
-              style={{
-                lineHeight: 0.9,
-                letterSpacing: "-0.02em",
-                color: "var(--ink-900)",
-                maxWidth: 720,
-              }}
-            >
-              {stat}
-            </h1>
-            <div
-              className="mt-3"
-              style={{
-                fontSize: 14,
-                color: "var(--ink-600)",
-                maxWidth: 540,
-              }}
-            >
-              {statSub}
-            </div>
-          </div>
+      <div className="flex items-start gap-4 sm:gap-5 min-w-0">
+        <div className="mt-4 sm:mt-[22px] shrink-0">
+          <BrandMark size={40} iconSize={20} />
         </div>
-
-        <div className="hidden md:flex flex-col items-end gap-5 shrink-0">
+        <div className="min-w-0">
           <div
+            className="mb-2"
             style={{
-              color: "var(--sage-plum)",
-              fontWeight: 600,
-              fontSize: 18,
-              letterSpacing: "-0.02em",
+              fontSize: 14,
+              fontWeight: 500,
+              letterSpacing: "0.044em",
+              color: "rgb(100,96,94)",
             }}
           >
-            notebouncer
+            {hostName}'s Bouncer Control
           </div>
-          <div className="flex items-center gap-3" style={{ color: "rgb(132,133,134)" }}>
-            <Avatar name={fullHostName} size={32} />
-            <span style={{ fontSize: 14, fontWeight: 500, color: "var(--ink-700)" }}>
-              {fullHostName}
-            </span>
+          <h1
+            className="m-0 font-light text-3xl sm:text-4xl md:text-5xl"
+            style={{
+              lineHeight: 0.9,
+              letterSpacing: "-0.02em",
+              color: "var(--ink-900)",
+              maxWidth: 720,
+            }}
+          >
+            {stat}
+          </h1>
+          <div
+            className="mt-3"
+            style={{
+              fontSize: 14,
+              color: "var(--ink-600)",
+              maxWidth: 540,
+            }}
+          >
+            {statSub}
           </div>
         </div>
       </div>
@@ -510,6 +508,46 @@ function EmptyHostsCard() {
       </div>
       <div style={{ fontSize: 13, color: "var(--ink-600)" }}>
         {COPY.emptyHosts.body}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * RulesPlaceholder — visible card for the "Rules" section in the sidebar.
+ * Custom detection rules aren't shipped yet; this exists so the section
+ * has a real anchor target for the scrollspy sidebar and clearly signals
+ * "coming soon" to the user.
+ */
+function RulesPlaceholder() {
+  return (
+    <div
+      className="rounded-2xl text-center"
+      style={{
+        background: "rgba(255, 255, 255, 0.4)",
+        border: "1px dashed rgba(168, 162, 158, 0.3)",
+        padding: 40,
+      }}
+    >
+      <div
+        className="mx-auto mb-3.5 rounded-xl flex items-center justify-center"
+        style={{
+          width: 40,
+          height: 40,
+          background: "rgba(168, 162, 158, 0.15)",
+          color: "var(--ink-600)",
+        }}
+      >
+        <Icon name="shield" size={18} />
+      </div>
+      <div
+        className="font-medium mb-1"
+        style={{ fontSize: 14, color: "var(--ink-900)" }}
+      >
+        Custom detection rules
+      </div>
+      <div style={{ fontSize: 12, color: "var(--ink-600)" }}>
+        Add your own patterns to catch bots we don't recognize. Coming soon.
       </div>
     </div>
   );
