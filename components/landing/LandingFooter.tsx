@@ -18,7 +18,7 @@ export function LandingFooter() {
       <div className="mx-auto max-w-[1136px] px-6 py-10 sm:px-8 sm:py-12">
         <div className="flex flex-col items-center gap-6 text-center sm:flex-row sm:items-end sm:justify-between sm:gap-6 sm:text-left">
           <div>
-            <SapienceLogo height={28} className="mx-auto sm:mx-0" />
+            <SapienceLogo height={36} className="mx-auto sm:mx-0" />
             <p className="mt-3 text-[11px] tracking-wide text-ink-500">
               © {new Date().getFullYear()} Sapience AI. All rights reserved.
             </p>

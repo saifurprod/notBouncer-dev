@@ -10,7 +10,9 @@ import { LandingNav } from "@/components/landing/LandingNav";
 import { LandingHero } from "@/components/landing/LandingHero";
 import { LandingProblemSection } from "@/components/landing/LandingProblemSection";
 import { LandingHowItWorksSection } from "@/components/landing/LandingHowItWorksSection";
+import { LandingDetectsSection } from "@/components/landing/LandingDetectsSection";
 import { LandingWhoItsForSection } from "@/components/landing/LandingWhoItsForSection";
+import { LandingClosingCTASection } from "@/components/landing/LandingClosingCTASection";
 import { LandingFooter } from "@/components/landing/LandingFooter";
 
 export const metadata: Metadata = {
@@ -41,7 +43,9 @@ export default function MarketingLandingPage({
       <LandingHero errorMessage={errorMessage} />
       <LandingProblemSection />
       <LandingHowItWorksSection />
+      <LandingDetectsSection />
       <LandingWhoItsForSection />
+      <LandingClosingCTASection />
       <LandingFooter />
     </main>
   );
