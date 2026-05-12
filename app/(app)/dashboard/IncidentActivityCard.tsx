@@ -438,6 +438,21 @@ function EventTable({
   rows: ActivityRow[];
   now: Date | null;
 }) {
+  const PAGE_SIZE = 5;
+  const [page, setPage] = useState(1);
+  const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+
+  // Reset to page 1 if the underlying rows array shrinks past the current
+  // page (e.g. user activates a filter that narrows the result set).
+  useEffect(() => {
+    if (page > totalPages) setPage(1);
+  }, [page, totalPages]);
+
+  const startIdx = (page - 1) * PAGE_SIZE;
+  const endIdx = startIdx + PAGE_SIZE;
+  const pageRows = rows.slice(startIdx, endIdx);
+  const showPagination = rows.length > PAGE_SIZE;
+
   return (
     <>
       {/* Desktop table — hidden on small screens */}
@@ -466,7 +481,7 @@ function EventTable({
           <div>Action</div>
           <div className="text-right">Latency</div>
         </div>
-        {rows.map((log, i) => {
+        {pageRows.map((log, i) => {
           const a = TONE_FOR_ACTION[log.action] ?? {
             tone: "slate" as const,
             label: log.action,
@@ -562,7 +577,7 @@ function EventTable({
 
       {/* Mobile cards — visible only on small screens */}
       <div className="md:hidden flex flex-col gap-2">
-        {rows.map((log) => {
+        {pageRows.map((log) => {
           const a = TONE_FOR_ACTION[log.action] ?? {
             tone: "slate" as const,
             label: log.action,
@@ -628,6 +643,18 @@ function EventTable({
           );
         })}
       </div>
+
+      {showPagination && (
+        <ActivityPagination
+          page={page}
+          totalPages={totalPages}
+          startIdx={startIdx}
+          endIdx={Math.min(endIdx, rows.length)}
+          total={rows.length}
+          entityName="event"
+          onPageChange={setPage}
+        />
+      )}
     </>
   );
 }
@@ -639,7 +666,7 @@ function MeetingList({
   meetings: MeetingForClient[];
   now: Date | null;
 }) {
-  const PAGE_SIZE = 10;
+  const PAGE_SIZE = 5;
   const [page, setPage] = useState(1);
   const totalPages = Math.max(1, Math.ceil(meetings.length / PAGE_SIZE));
   // Reset to page 1 if the underlying meetings array shrinks past the
@@ -662,7 +689,7 @@ function MeetingList({
       {pageMeetings.map((m) => {
         const whenText = now ? formatTimestamp(m.latestISO, now) : "—";
         const idShort =
-          m.meetingId.length >= 5
+          m.meetingId.length > 11
             ? `${m.meetingId.slice(0, 4)}…${m.meetingId.slice(-4)}`
             : m.meetingId;
         return (
@@ -800,12 +827,13 @@ function MeetingList({
         );
       })}
       {showPagination && (
-        <MeetingPagination
+        <ActivityPagination
           page={page}
           totalPages={totalPages}
           startIdx={startIdx}
           endIdx={Math.min(endIdx, meetings.length)}
           total={meetings.length}
+          entityName="meeting"
           onPageChange={setPage}
         />
       )}
@@ -814,17 +842,21 @@ function MeetingList({
 }
 
 /**
- * MeetingPagination — client-side pagination controls for the meeting list.
- * Renders "Showing X–Y of N · prev / page numbers / next" below the meeting
- * cards. Page numbers are condensed when there are many pages: shows first,
- * last, current, and neighbors with ellipses between.
+ * ActivityPagination — client-side pagination controls used by both the
+ * meeting list and the event table. Renders "Showing X–Y of N <entity>"
+ * with prev / page numbers / next. Page numbers are condensed when there
+ * are many pages: shows first, last, current, and neighbors with ellipses.
+ *
+ * `entityName` should be in singular form ("meeting", "event"); the
+ * component pluralizes naively by appending "s" when total !== 1.
  */
-function MeetingPagination({
+function ActivityPagination({
   page,
   totalPages,
   startIdx,
   endIdx,
   total,
+  entityName,
   onPageChange,
 }: {
   page: number;
@@ -832,6 +864,7 @@ function MeetingPagination({
   startIdx: number;
   endIdx: number;
   total: number;
+  entityName: string;
   onPageChange: (n: number) => void;
 }) {
   return (
@@ -842,7 +875,7 @@ function MeetingPagination({
       }}
     >
       <div style={{ fontSize: 11, color: "var(--ink-600)" }}>
-        Showing {startIdx + 1}–{endIdx} of {total} meeting
+        Showing {startIdx + 1}–{endIdx} of {total} {entityName}
         {total === 1 ? "" : "s"}
       </div>
       <div className="flex gap-1.5">
