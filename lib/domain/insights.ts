@@ -74,7 +74,7 @@ export function generateInsight(logs: LogShape[]): Insight | null {
   // Build headline + body
   const headline =
     topLabel && topPct > 0
-      ? `${topLabel} appeared in ${topPct}% of your detections this week — the most of any bot.`
+      ? `${topLabel} appeared in ${topPct}% of your detections this week, the most of any bot.`
       : `${recent.length} bot${recent.length === 1 ? "" : "s"} detected this week.`;
 
   const bodyParts: string[] = [];
