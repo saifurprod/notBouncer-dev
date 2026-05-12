@@ -33,7 +33,7 @@ export function LandingDetectsSection() {
           What we detect
         </p>
         <h2 className="mb-6 max-w-[720px] text-[28px] font-light leading-[1.2] tracking-[-0.02em] text-ink-900 sm:text-[32px] lg:text-[36px] lg:leading-[1.15]">
-          Twelve notetaker vendors and counting.
+          If it's a notetaker, we know about it.
         </h2>
         <p className="mb-10 max-w-[560px] text-[15px] leading-[1.65] text-ink-700 sm:text-[16px] sm:leading-[1.6]">
           If a bot from any of these joins your meeting, NoteBouncer catches

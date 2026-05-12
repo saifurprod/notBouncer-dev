@@ -44,7 +44,7 @@ export default function MarketingLandingPage({
       <LandingProblemSection />
       <LandingHowItWorksSection />
       <LandingDetectsSection />
-      {/* <LandingWhoItsForSection /> */}
+      <LandingWhoItsForSection />
       <LandingClosingCTASection />
       <LandingFooter />
     </main>
